@@ -1,0 +1,96 @@
+name: Job Hunter Sentinel - Scheduled Runs
+
+on:
+  # Twice daily: 6 AM and 1 PM Eastern Standard Time (EST/UTC-5)
+  # Each run searches for jobs posted in the last 24 hours
+  # Deduplication prevents sending the same job twice
+  schedule:
+    - cron: '0 11 * * *'  # 6:00 AM EST (UTC 11:00)
+    - cron: '0 18 * * *'  # 1:00 PM EST (UTC 18:00)
+
+  # Allow manual trigger
+  workflow_dispatch:
+
+jobs:
+  run-job-hunter:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Install dependencies
+        run: |
+          uv venv .venv
+          uv pip install -e .
+
+      - name: Run Job Hunter Sentinel
+        env:
+          # Gmail SMTP Configuration
+          GMAIL_EMAIL: ${{ secrets.GMAIL_EMAIL }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          # Recipient Configuration
+          RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}  # Legacy fallback
+          RECIPIENTS: ${{ secrets.RECIPIENTS }}  # Multi-recipient JSON config
+          # Database & API
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_MODEL: ${{ secrets.OPENROUTER_MODEL }}
+          # Agent Workflow Configuration
+          USE_AGENT_WORKFLOW: ${{ vars.USE_AGENT_WORKFLOW }}
+          REVIEWER_SAMPLE_RATE: ${{ vars.REVIEWER_SAMPLE_RATE }}
+          AGENT_CONCURRENCY: ${{ vars.AGENT_CONCURRENCY }}
+          # Job Search Configuration
+          SEARCH_TERMS: ${{ vars.SEARCH_TERMS }}  # Legacy fallback for single recipient
+          LOCATIONS: ${{ vars.LOCATIONS }}
+          RESULTS_WANTED: ${{ vars.RESULTS_WANTED }}
+          RESULTS_WANTED_MAP: ${{ vars.RESULTS_WANTED_MAP }}
+          HOURS_OLD: ${{ vars.HOURS_OLD }}  # Search jobs from last 24 hours
+          USE_LLM_FILTER: ${{ vars.USE_LLM_FILTER }}
+          SITES: ${{ vars.SITES }}
+        run: |
+          source .venv/bin/activate
+          python main.py
+
+      - name: Upload execution logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: job-hunter-logs-${{ github.run_number }}
+          path: logs/*.log
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Upload scraped data
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: job-data-${{ github.run_number }}
+          path: data/*.json
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Commit data changes
+        if: success()
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+
+          # Add database and data files
+          git add sent_jobs.txt data/*.json data/*.csv data/*.jsonl || true
+
+          # Commit if there are changes
+          if ! git diff --staged --quiet; then
+            git commit -m "Auto-update: Job data $(date '+%Y-%m-%d %H:%M') [skip ci]"
+            git push
+          fi
