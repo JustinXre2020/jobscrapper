@@ -17,8 +17,11 @@ from scraper import JobScraper
 from database import JobDatabase
 from email_sender import EmailSender
 from data_manager import DataManager
-from llm_filter import OpenRouterLLMFilter
-from config import parse_recipients, get_all_search_terms, mask_email
+if os.getenv("USE_AGENT_WORKFLOW", "true").lower() == "true":
+    from job_filter import OpenRouterLLMFilter
+else:
+    from llm_filter_legacy import OpenRouterLLMFilter
+from config import parse_recipients, get_all_search_terms, mask_email, get_results_wanted, get_scrape_queries, DEFAULT_RESULTS_WANTED
 
 load_dotenv()
 
@@ -119,7 +122,6 @@ class JobHunterSentinel:
 
             # Configuration
             self.locations = self._get_list_config("LOCATIONS", ["San Francisco, CA"])
-            self.results_wanted = int(os.getenv("RESULTS_WANTED", "20"))
             self.hours_old = int(os.getenv("HOURS_OLD", "24"))
             self.use_llm_filter = os.getenv("USE_LLM_FILTER", "true").lower() == "true"
             self.llm_workers = int(os.getenv("LLM_WORKERS", "0"))  # 0 = auto-detect based on RAM
@@ -136,7 +138,7 @@ class JobHunterSentinel:
                 logger.info(f"     - {mask_email(r.email)} (needs_sponsorship={r.needs_sponsorship}, terms={r.search_terms})")
             logger.info(f"   All Search Terms: {self.all_search_terms}")
             logger.info(f"   Locations: {self.locations}")
-            logger.info(f"   Results Wanted: {self.results_wanted}")
+            logger.info(f"   Results Wanted: per-term (default={DEFAULT_RESULTS_WANTED})")
             logger.info(f"   Time Window: {self.hours_old} hours")
             logger.info(f"   LLM Filter: {'Enabled' if self.use_llm_filter else 'Disabled'}")
             logger.info(f"   LLM Workers: {self.llm_workers if self.llm_workers > 0 else 'auto'}")
@@ -277,10 +279,16 @@ class JobHunterSentinel:
                 # Step 1: Scrape Jobs for THIS keyword only
                 logger.info(f"\n📡 STEP 1: Scraping job postings for '{search_term}'...")
                 logger.info("-" * 60)
+
+                # Get per-term results count and scrape queries (groups expand)
+                results_wanted = get_results_wanted(search_term)
+                scrape_queries = get_scrape_queries(search_term)
+                logger.info(f"   Scraping {results_wanted} results for queries: {scrape_queries}")
+
                 jobs_df = self.scraper.scrape_multiple_queries(
-                    search_terms=[search_term],
+                    search_terms=scrape_queries,
                     locations=self.locations,
-                    results_wanted=self.results_wanted,
+                    results_wanted=results_wanted,
                     hours_old=self.hours_old
                 )
 
