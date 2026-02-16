@@ -12,6 +12,8 @@ import logging
 from typing import Dict, List, Optional, Any
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
+from pydantic import BaseModel, Field
+import instructor
 import pandas as pd
 
 # Load environment variables
@@ -26,13 +28,35 @@ OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "liquid/lfm-2.5-1.2b-instruct:f
 _openrouter_client: Optional[AsyncOpenAI] = None
 
 
+class JobEvaluation(BaseModel):
+    """Structured LLM output for job evaluation."""
+    keyword_match: bool = Field(
+        description="True if the job title matches any target role (ignoring seniority modifiers like Senior, Lead, Staff, etc.)"
+    )
+    visa_sponsorship: bool = Field(
+        description="True unless the posting explicitly bars visa holders. Default True if silent on sponsorship."
+    )
+    entry_level: bool = Field(
+        description="True only if 0 years experience required, title contains Junior/Associate/Entry-Level with no years mentioned, or explicitly states no experience required."
+    )
+    requires_phd: bool = Field(
+        description="True only if a PhD/doctorate is listed as a mandatory requirement, not merely preferred."
+    )
+    is_internship: bool = Field(
+        description="True if the role is an internship, co-op, fellowship, or apprenticeship."
+    )
+    reason: str = Field(
+        description="Concise breakdown of the logic used for each field, citing specific text from the posting."
+    )
+
+
 def _get_openrouter_client() -> AsyncOpenAI:
     """Get or create the shared AsyncOpenAI client for OpenRouter."""
     global _openrouter_client
     if _openrouter_client is None:
         if not OPENROUTER_API_KEY:
             raise OpenRouterError("OPENROUTER_API_KEY environment variable not set")
-        _openrouter_client = AsyncOpenAI(
+        base_client = AsyncOpenAI(
             base_url=OPENROUTER_API_URL,
             api_key=OPENROUTER_API_KEY,
             default_headers={
@@ -41,6 +65,7 @@ def _get_openrouter_client() -> AsyncOpenAI:
             },
             timeout=60.0,
         )
+        _openrouter_client = instructor.from_openai(base_client, mode=instructor.Mode.JSON)
     return _openrouter_client
 
 
@@ -77,26 +102,66 @@ def _create_prompt(job: Dict, search_terms: List[str]) -> str:
         Analyze the job posting above and extract the following data points into JSON format.
 
         1. keyword_match: (true/false)
-        - Perform a semantic match between the "Job Title" and the "Target Roles" list.
-        - Return TRUE if the job represents the same professional function as any Target Role, even if the wording differs. 
-        - Ignore seniority levels (e.g., "II", "Senior", "Lead") unless the Target Role list specifically filters for them.
+        - Logic: Compare the "Job Title" against the "Target Roles" list.
+        - Return TRUE if the job title represents the same professional function as any role in the Target Roles list, regardless of seniority level.
+        - Seniority modifiers to ignore: Senior, Lead, Staff, Principal, Junior, Entry-level, I, II, III, IV, etc.
+        - Examples:
+            * Job Title: "Senior Software Engineer - Web Platform"
+            * Target Roles: ["software engineer"]
+            * Result: TRUE (both are software engineering roles)
+            
+            * Job Title: "Lead Product Manager"
+            * Target Roles: ["software engineer", "product manager"]
+            * Result: TRUE (matches "product manager")
+            
+            * Job Title: "Data Scientist II"
+            * Target Roles: ["software engineer"]
+            * Result: FALSE (different professional function)
 
         2. visa_sponsorship: (true/false)
-        - Does the description explicitly state they will NOT provide sponsorship?
-        - Return FALSE if you see phrases like "Must be a US Citizen," "No sponsorship available," or "Work authorization required without sponsorship."
-        - Return TRUE if sponsorship is mentioned as available, OR if there is no mention of work authorization requirements (assume a neutral/positive stance).
+        - Logic: Is this job "Sponsorship Friendly" (i.e., not explicitly barred to visa holders)?
+        - DEFAULT to TRUE: If the job description is silent or neutral regarding work authorization, you must return TRUE.
+        - Return FALSE ONLY if there is an EXPLICIT negative statement. Examples of phrases that trigger FALSE: 
+            * "Must be a US Citizen or Permanent Resident."
+            * "No visa sponsorship available."
+            * "Candidates must be authorized to work in the US without the need for current or future sponsorship."
+            * "We do not sponsor H1-B visas."
+        - Return TRUE if:
+            * Sponsorship is mentioned as available.
+            * The text makes NO MENTION of work authorization, citizenship, or sponsorship requirements. (Silence = TRUE)
+        EXAMPLES:
+        - "Must be US Citizen or Permanent Resident" → FALSE
+        - "No visa sponsorship available" → FALSE
+        - No mention of authorization → TRUE (silence = TRUE)
+        - "Visa sponsorship available" → TRUE
 
         3. is_internship: (true/false)
-        - Return TRUE if the job is labeled as an "Intern," "Co-op," "Fellowship," or "Apprenticeship."
+        - Logic: Is this an internsip role?
+        - Rule: Return TRUE if the job is labeled as an "Intern," "Internship," "Co-op," "Fellowship," or "Apprenticeship." Otherwise, return FALSE.
 
         4. entry_level: (true/false)
-        - Determine if this is a "starting" role (0-3 years of experience).
-        - Return FALSE if: The title includes "Senior," "Lead," "Principal," "Director," or if the text requires 4+ years of experience.
-        - Return TRUE if: The title includes "Junior," "Associate," "Entry-level," "Trainee," "Intern," "Internship", or if the experience requirement is 0-3 years (or not mentioned).
+        DEFINITION: Entry-level roles are positions that require 0 years of professional experience.
+
+        STRICT SEARCH REQUIREMENT: You MUST carefully scan the 'Qualifications', 'Requirements', 'What You Will Bring', or similar sections for ANY numerical mention of years of experience required.
+
+        CRITICAL RULE: If you find ANY experience requirement that starts with a number GREATER than 0 (examples: "1 year", "1+ years", "2 years", "3+ years", "5 years of related experience"), you MUST return false.
+
+        Return true ONLY if ONE of these conditions is met:
+            a) The experience requirement explicitly starts with 0 (e.g., "0-2 years", "0-1 years of experience").
+            b) NO years of experience are mentioned anywhere in the qualifications/requirements section AND the job title contains "Junior", "Associate", or "Entry-Level".
+            c) The description explicitly states "No experience required" or "No prior experience necessary".
+
+        EXAMPLES:
+        - "Bachelor's Degree with 5 years of related experience" → entry_level: FALSE (requires 5 years)
+        - "Master's Degree and 3 years of experience" → entry_level: FALSE (requires 3 years)
+        - "1+ year of experience preferred" → entry_level: FALSE (requires 1+ years)
+        - "0-2 years of experience" → entry_level: TRUE (starts with 0)
+        - "Junior Developer, Bachelor's degree required" (no years mentioned) → entry_level: TRUE (Junior title + no years)
+        - "Software Engineer, Bachelor's degree required" (no years mentioned) → entry_level: FALSE (no Junior/Associate/Entry-Level in title)
 
         5. requires_phd: (true/false)
-        - Return TRUE only if a PhD or Doctorate is explicitly listed as a MANDATORY requirement. (If it is "preferred," return false).
-
+        - Logic: Is a Doctorate mandatory?
+        - Rule: Return TRUE only if a PhD is listed as a MANDATORY requirement. If it is "preferred" or not mentioned, return FALSE.
 
         ### OUTPUT FORMAT
         Respond ONLY with valid JSON.
@@ -106,7 +171,7 @@ def _create_prompt(job: Dict, search_terms: List[str]) -> str:
             "entry_level": boolean,
             "requires_phd": boolean,
             "is_internship": boolean,
-            "reason": "Identify the specific Target Role that matched and the years of experience found."
+            "reason": "A concise breakdown of the logic used for each field, citing specific text (or lack thereof) regarding target role match, exact years of experience found, visa restrictions, education, and internship identifiers."
         }}
         """
 
@@ -164,7 +229,8 @@ async def _call_openrouter(
     max_tokens: int = 8192,
     client: Optional[AsyncOpenAI] = None,
     job_context: Optional[str] = None,
-) -> str:
+    response_model: Optional[type] = None,
+) -> str | BaseModel:
     """
     Make an async call to OpenRouter API using AsyncOpenAI client.
 
@@ -175,9 +241,10 @@ async def _call_openrouter(
         max_tokens: Maximum tokens in response.
         client: Optional AsyncOpenAI client for connection reuse.
         job_context: Optional job identifier for logging (e.g., "Job Title @ Company").
+        response_model: Optional Pydantic model for structured output via instructor.
 
     Returns:
-        The assistant's response content.
+        The assistant's response content (str), or a validated Pydantic instance if response_model is provided.
 
     Raises:
         OpenRouterError: If the API call fails.
@@ -191,19 +258,24 @@ async def _call_openrouter(
     logger.debug(f"LLM_PROMPT{context_str}:\n{'-'*60}\n{user_prompt}\n{'-'*60}")
 
     try:
-        response = await client.chat.completions.create(
-            model=model,
-            messages=messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
-
-        response_content = response.choices[0].message.content
-
-        # Log the response received
-        logger.debug(f"LLM_RESPONSE{context_str}:\n{'-'*60}\n{response_content}\n{'-'*60}")
-
-        return response_content
+        if response_model:
+            response = await client.chat.completions.create(
+                model=model,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                response_model=response_model,
+            )
+            return response  # Validated Pydantic instance
+        else:
+            response = await client.chat.completions.create(
+                model=model,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+            response_content = response.choices[0].message.content
+            return response_content
 
     except Exception as e:
         error_str = str(e)
@@ -238,7 +310,6 @@ async def evaluate_job_async(
         # Skip jobs with no description
         desc = _safe_str(job.get('description'), '')
         if not desc or len(desc) < 50:
-            logger.debug(f"SKIPPED [{job_context}]: No description (length={len(desc)})")
             return {
                 "keyword_match": False,
                 "visa_sponsorship": False,
@@ -258,8 +329,17 @@ async def evaluate_job_async(
             {"role": "user", "content": prompt}
         ]
 
-        response_text = await _call_openrouter(messages, client=client, job_context=job_context)
-        result = _parse_response(response_text)
+        try:
+            evaluation = await _call_openrouter(
+                messages, client=client, job_context=job_context,
+                response_model=JobEvaluation,
+            )
+            result = evaluation.model_dump()
+        except Exception as e:
+            logger.warning(f"Structured output failed [{job_context}]: {e}, falling back to text parsing")
+            response_text = await _call_openrouter(messages, client=client, job_context=job_context)
+            result = _parse_response(response_text)
+
         result['job_title'] = job_title
         result['company'] = company
 
@@ -271,7 +351,7 @@ async def evaluate_job_async(
             f"entry={result.get('entry_level')}, "
             f"phd={result.get('requires_phd')}, "
             f"intern={result.get('is_internship')} | "
-            f"{result.get('reason', '')[:80]}"
+            f"{result.get('reason', '')}"
         )
 
         return result

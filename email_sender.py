@@ -329,6 +329,7 @@ class EmailSender:
 
                 if not filtered_jobs:
                     logger.warning(f"⚠️ No jobs for {mask_email(recipient.email)} (needs_sponsorship={recipient.needs_sponsorship})")
+                    self.send_empty_notification([recipient])
                     results[recipient.email] = True  # Not a failure, just no matching jobs
                     continue
 
@@ -355,9 +356,9 @@ class EmailSender:
 
         return results
 
-    def send_empty_notification(self) -> Dict[str, bool]:
+    def send_empty_notification(self, recipents: List[Recipient] = []) -> Dict[str, bool]:
         """
-        Send a notification when no jobs are found to all recipients.
+        Send a notification when no jobs are found to all recipients. If no recipents passed, default to send all
 
         Returns:
             Dict mapping recipient email -> success status
@@ -390,7 +391,7 @@ class EmailSender:
 
         subject = f"📭 Job Hunter - 今日无新职位 ({today})"
 
-        for recipient in self.recipients:
+        for recipient in recipents or self.recipients:
             try:
                 success = self._send_email(recipient.email, subject, html_body)
 
