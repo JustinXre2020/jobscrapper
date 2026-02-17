@@ -52,24 +52,29 @@ reason: {evaluation.get('reason', '')}
 Target Roles: [{search_terms_str}]
 
 ### REVIEW CRITERIA
-Check each field for logical consistency:
+Check each field for logical consistency. Only reject for WRONG BOOLEAN VALUES, not for reasoning quality.
 
-1. **keyword_match**: Does the normalized title match any target role? If seniority_level is ignored, does the role_type align with the target roles?
+1. **keyword_match**: Does the normalized title match any target role (ignoring seniority modifiers)?
 
-2. **visa_sponsorship**: If visa_statements is empty, this MUST be True (silence = True). If visa_statements contain explicit bars ("must be US citizen", "no sponsorship"), this should be False.
+2. **visa_sponsorship**: If visa_statements is empty, this MUST be True (silence = True). Do NOT contradict this rule. Empty visa_statements + visa_sponsorship=True is CORRECT. If visa_statements contain explicit bars ("must be US citizen", "no sponsorship", "without sponsorship"), this should be False.
 
 3. **entry_level**: Check for contradictions:
-   - If years_experience_required >= 1 but entry_level=True -> CONTRADICTION
-   - If seniority_level is "senior"/"lead"/"staff" but entry_level=True -> CONTRADICTION
+   - If years_experience_required >= 2 but entry_level=True -> CONTRADICTION
+   - If seniority_level is "mid"/"senior"/"lead"/"staff"/"principal"/"director"/"vp" but entry_level=True -> CONTRADICTION
+   - If years_experience_required is null/0/1 and seniority_level is "entry"/"intern" and entry_level=True -> CORRECT (0-1 years is normal for entry-level)
    - If years_experience_required is null/0 and seniority_level is "entry"/"intern"/"unknown" and entry_level=False -> POSSIBLE ERROR
 
 4. **requires_phd**: If education_required != "phd" but requires_phd=True -> CONTRADICTION
 
 5. **is_internship**: If is_internship_coop from summary differs from is_internship in evaluation -> CONTRADICTION
 
+### IMPORTANT RULES
+- If the evaluation is correct, you MUST approve. Do NOT reject for reasoning quality — only reject for wrong boolean values.
+- Do NOT contradict the rules in this prompt. If visa_statements is empty and visa_sponsorship is True, that is CORRECT per the rules above.
+
 ### OUTPUT FORMAT
 Respond with JSON:
 {{
     "approved": true/false,
-    "feedback": "If not approved: specific correction explaining what the Analyzer got wrong and the correct value based on the data. If approved: brief confirmation."
+    "feedback": "Under 200 chars. If rejected: state field name, expected value, and why. If approved: 'Correct.'"
 }}"""

@@ -2,7 +2,7 @@
 
 import json
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from infra.llm_client import LLMClient, LLMClientError
 from infra.models import JobEvaluation
@@ -11,6 +11,55 @@ from agent.state import AgentState
 from agent.prompts.analyzer_prompt import ANALYZER_SYSTEM, build_analyzer_prompt
 
 logger = logging.getLogger(__name__)
+
+
+def _deterministic_eval(
+    summary: Dict[str, Any], search_terms: list[str]
+) -> Dict[str, Optional[bool]]:
+    """Rule-based evaluation for unambiguous cases. Returns None for fields needing LLM."""
+    result: Dict[str, Optional[bool]] = {}
+
+    # visa_sponsorship: empty → True, explicit denial phrases → False
+    visa = summary.get("visa_statements", [])
+    if not visa:
+        result["visa_sponsorship"] = True
+    else:
+        denial_phrases = [
+            "must be", "no visa", "without sponsorship",
+            "u.s. person", "us citizen", "u.s. citizen",
+            "without the need for", "not available",
+        ]
+        has_denial = any(
+            any(d in stmt.lower() for d in denial_phrases) for stmt in visa
+        )
+        result["visa_sponsorship"] = not has_denial
+
+    # is_internship: directly from summary + title keywords
+    is_intern = summary.get("is_internship_coop", False)
+    title = (summary.get("title_normalized") or "").lower()
+    intern_words = ["intern", "internship", "co-op", "fellowship", "apprenticeship"]
+    result["is_internship"] = is_intern or any(w in title for w in intern_words)
+
+    # requires_phd: directly from education field
+    result["requires_phd"] = summary.get("education_required") == "phd"
+
+    # entry_level: deterministic for clear cases
+    years = summary.get("years_experience_required")
+    seniority = summary.get("seniority_level", "unknown")
+    senior_levels = {"mid", "senior", "lead", "staff", "principal", "director", "vp"}
+    if seniority in senior_levels:
+        result["entry_level"] = False
+    elif isinstance(years, (int, float)) and years >= 2:
+        result["entry_level"] = False
+    elif seniority in ("entry", "intern") and (years is None or years <= 1):
+        result["entry_level"] = True
+    else:
+        result["entry_level"] = None  # ambiguous — let LLM decide
+
+    # keyword_match: requires semantic judgment, leave to LLM
+    result["keyword_match"] = None
+
+    return result
 
 
 def _parse_text_fallback(response_text: str) -> Dict[str, Any]:
@@ -71,6 +120,9 @@ async def analyzer_node(state: AgentState, llm_client: LLMClient) -> Dict[str, A
         retry_count += 1
 
     try:
+        # Deterministic pre-check for unambiguous fields
+        deterministic = _deterministic_eval(summary, search_terms)
+
         prompt = build_analyzer_prompt(
             summary,
             search_terms,
@@ -92,6 +144,15 @@ async def analyzer_node(state: AgentState, llm_client: LLMClient) -> Dict[str, A
             logger.warning(f"Structured output failed [{job_context}], falling back to text")
             response_text = await llm_client.complete_text(messages, job_context=job_context)
             result = _parse_text_fallback(response_text)
+
+        # Override LLM results with deterministic values where available
+        for field, value in deterministic.items():
+            if value is not None and result.get(field) != value:
+                logger.debug(
+                    f"Deterministic override [{job_context}]: "
+                    f"{field} {result.get(field)} -> {value}"
+                )
+                result[field] = value
 
         result["job_title"] = job_title
         result["company"] = company

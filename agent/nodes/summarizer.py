@@ -55,6 +55,7 @@ async def summarizer_node(state: AgentState, llm_client: LLMClient) -> Dict[str,
             summary_model = await llm_client.complete_structured(
                 messages, JobSummaryModel, job_context=job_context
             )
+            logger.info(f"SUMMARY [{job_context}]: {summary_model}")
             summary_dict = summary_model.model_dump()
         except (LLMClientError, Exception) as struct_err:
             # Structured output failed (often due to invalid JSON escapes from

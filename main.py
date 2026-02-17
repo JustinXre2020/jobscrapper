@@ -14,13 +14,13 @@ import pandas as pd
 
 # Import custom modules
 from scraper import JobScraper
-from database import JobDatabase
-from email_sender import EmailSender
-from data_manager import DataManager
+from storage.database import JobDatabase
+from notification.email_sender import EmailSender
+from storage.data_manager import DataManager
 if os.getenv("USE_AGENT_WORKFLOW", "true").lower() == "true":
-    from job_filter import OpenRouterLLMFilter
+    from filtering.job_filter import OpenRouterLLMFilter
 else:
-    from llm_filter_legacy import OpenRouterLLMFilter
+    from filtering.llm_filter_legacy import OpenRouterLLMFilter
 from config import parse_recipients, get_all_search_terms, mask_email, get_results_wanted, get_scrape_queries, DEFAULT_RESULTS_WANTED
 
 load_dotenv()

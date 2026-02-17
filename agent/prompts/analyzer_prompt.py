@@ -87,11 +87,12 @@ Using the structured data above, evaluate the job on these criteria:
 
 4. **entry_level**: (true/false)
    - Use seniority_level and years_experience_required from the structured data.
-   - Return TRUE ONLY if ONE of these conditions is met:
-     a) years_experience_required is 0 or null AND seniority_level is "entry" or "intern"
+   - Return TRUE if ONE of these conditions is met:
+     a) years_experience_required is 0, 1, or null AND seniority_level is "entry" or "intern"
      b) years_experience_required starts with 0 (e.g., "0-2 years")
      c) The description explicitly states "No experience required"
-   - Return FALSE if years_experience_required >= 1.
+   - Note: 0-1 year requirements are common for entry-level roles, so treat them as entry-level when seniority confirms it.
+   - Return FALSE if years_experience_required >= 2.
    - Return FALSE if seniority_level is "mid", "senior", "lead", "staff", "principal", "director", or "vp".
 
 5. **requires_phd**: (true/false)
