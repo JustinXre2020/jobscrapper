@@ -4,7 +4,7 @@ Sends daily job digest with HTML formatting
 Supports multiple recipients with per-recipient job filtering
 """
 import os
-import logging
+from loguru import logger
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -16,7 +16,6 @@ from config import Recipient, parse_recipients
 
 load_dotenv()
 
-logger = logging.getLogger(__name__)
 
 
 def mask_email(email: str) -> str:
@@ -143,7 +142,6 @@ class EmailSender:
             HTML string
         """
         import pandas as pd
-        import re
 
         # Helper to safely get string values (handles NaN/None)
         def safe_str(value, default=''):
@@ -151,40 +149,17 @@ class EmailSender:
                 return default
             return str(value)
 
-        def markdown_to_html(text: str) -> str:
-            """Convert basic markdown to HTML"""
-            if not text:
-                return text
-            # Remove escape characters
-            text = text.replace('\\-', '-').replace('\\*', '*').replace('\\_', '_')
-            # Bold: **text** or __text__ -> <strong>text</strong>
-            text = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', text)
-            text = re.sub(r'__(.+?)__', r'<strong>\1</strong>', text)
-            # Italic: *text* or _text_ -> <em>text</em>
-            text = re.sub(r'\*(.+?)\*', r'<em>\1</em>', text)
-            text = re.sub(r'_(.+?)_', r'<em>\1</em>', text)
-            # Line breaks
-            text = text.replace('\n', '<br>')
-            # Headers: # text -> bold text
-            text = re.sub(r'^#+\s*(.+?)$', r'<strong>\1</strong>', text, flags=re.MULTILINE)
-            return text
-
         title = safe_str(job.get('title'), 'Unknown Position')
         company = safe_str(job.get('company'), 'Unknown Company')
         location = safe_str(job.get('location'), 'Unknown Location')
         job_url = safe_str(job.get('job_url'), '#')
         site = safe_str(job.get('site'), 'Unknown')
-        description = safe_str(job.get('description'), '')
 
         # Get visa sponsorship status for badge
         llm_eval = job.get('llm_evaluation', {})
         has_visa = llm_eval.get('visa_sponsorship', False)
         visa_badge = '🟢 Visa Sponsor' if has_visa else '🔴 No Visa Info'
 
-        # Convert markdown to HTML and truncate
-        description = markdown_to_html(description)
-        if description and len(description) > 400:
-            description = description[:400] + "..."
 
         return f"""
         <div style="border: 1px solid #e2e8f0; border-radius: 8px; padding: 20px; margin-bottom: 20px; background-color: #ffffff;">
@@ -201,12 +176,6 @@ class EmailSender:
             <div style="color: #94a3b8; font-size: 12px; margin-bottom: 12px;">
                 来源: {site.upper() if site else 'N/A'} · {visa_badge}
             </div>
-
-            {f'''<div style="background-color: #f8fafc; padding: 12px; border-radius: 6px; margin-bottom: 12px;">
-                <p style="margin: 0; color: #334155; font-size: 14px; line-height: 1.6;">
-                    {description}
-                </p>
-            </div>''' if description else ''}
 
             <div style="margin-top: 12px;">
                 <a href="{job_url}" style="display: inline-block; background-color: #2563eb; color: white; padding: 8px 16px; border-radius: 6px; text-decoration: none; font-size: 14px; font-weight: 500;">

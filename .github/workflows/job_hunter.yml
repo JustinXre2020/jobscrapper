@@ -1,11 +1,10 @@
 name: Job Hunter Sentinel - Scheduled Runs
 
 on:
-  # Twice daily: 6 AM and 1 PM Eastern Standard Time (EST/UTC-5)
+  # Daily run: 1 PM Eastern Standard Time (EST/UTC-5)
   # Each run searches for jobs posted in the last 24 hours
   # Deduplication prevents sending the same job twice
   schedule:
-    - cron: '0 11 * * *'  # 6:00 AM EST (UTC 11:00)
     - cron: '0 18 * * *'  # 1:00 PM EST (UTC 18:00)
 
   # Allow manual trigger
@@ -42,16 +41,17 @@ jobs:
           # Recipient Configuration
           RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}  # Legacy fallback
           RECIPIENTS: ${{ secrets.RECIPIENTS }}  # Multi-recipient JSON config
-          # Database & API
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          # API
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENROUTER_MODEL: ${{ secrets.OPENROUTER_MODEL }}
+          # Agent Workflow Configuration
+          AGENT_CONCURRENCY: ${{ vars.AGENT_CONCURRENCY }}
           # Job Search Configuration
           SEARCH_TERMS: ${{ vars.SEARCH_TERMS }}  # Legacy fallback for single recipient
           LOCATIONS: ${{ vars.LOCATIONS }}
           RESULTS_WANTED: ${{ vars.RESULTS_WANTED }}
+          RESULTS_WANTED_MAP: ${{ vars.RESULTS_WANTED_MAP }}
           HOURS_OLD: ${{ vars.HOURS_OLD }}  # Search jobs from last 24 hours
-          USE_LLM_FILTER: ${{ vars.USE_LLM_FILTER }}
           SITES: ${{ vars.SITES }}
         run: |
           source .venv/bin/activate
@@ -82,7 +82,7 @@ jobs:
           git config --local user.name "GitHub Action"
 
           # Add database and data files
-          git add sent_jobs.txt data/*.json data/*.csv || true
+          git add sent_jobs.txt data/*.json data/*.csv data/*.jsonl || true
 
           # Commit if there are changes
           if ! git diff --staged --quiet; then

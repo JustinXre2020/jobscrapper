@@ -3,25 +3,23 @@ name = "job-hunter-sentinel"
 version = "0.1.0"
 description = "AI-powered job scraping and recommendation system for O-1 visa applicants"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.13"
 license = { text = "MIT" }
 authors = [
-    { name = "Resume Matcher Team" }
+    { name = "Job Scrapper" }
 ]
 
 dependencies = [
     "python-jobspy>=1.1.77",
-    "google-generativeai>=0.3.0",
     "pandas>=2.0.0",
-    "resend>=0.7.0",
     "python-dotenv>=1.0.0",
     "sqlalchemy>=2.0.0",
-    "psutil>=5.9.0",
-    "llama-cpp-python>=0.2.0",
-    "huggingface-hub>=0.20.0",
+    "loguru>=0.7.2",
     "openai>=1.0.0",
     "pydantic>=2.0.0",
     "instructor>=1.0.0",
+    "langgraph>=0.2.0",
+    "scikit-learn>=1.8.0",
 ]
 
 [project.optional-dependencies]
@@ -30,6 +28,7 @@ dev = [
     "pytest-asyncio>=0.21.0",
     "black>=23.0.0",
     "ruff>=0.1.0",
+    "scikit-learn>=1.3.0",
 ]
 
 [build-system]
@@ -40,8 +39,9 @@ build-backend = "hatchling.build"
 packages = ["."]
 
 [tool.uv]
-dev-dependencies = []
-
+dev-dependencies = [
+    "pytest>=9.0.2",
+]
 [tool.black]
 line-length = 100
 target-version = ['py310', 'py311']
@@ -49,6 +49,11 @@ target-version = ['py310', 'py311']
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = ["live: tests that call real OpenRouter API"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W"]

@@ -5,7 +5,7 @@ Aggregates job postings from multiple sources using python-jobspy
 import os
 import time
 import random
-import logging
+from loguru import logger
 from typing import List, Dict, Optional
 from jobspy import scrape_jobs
 import pandas as pd
@@ -13,7 +13,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-logger = logging.getLogger(__name__)
 
 
 class JobScraper:
@@ -130,8 +129,56 @@ class JobScraper:
 
         combined = pd.concat(all_jobs, ignore_index=True)
 
-        # Remove duplicates based on job_url
-        combined = combined.drop_duplicates(subset=['job_url'], keep='first')
+        def _normalize_text(value: object) -> str:
+            if value is None or (isinstance(value, float) and pd.isna(value)):
+                return ""
+            return " ".join(str(value).strip().lower().split())
+
+        def _merge_locations(locations: pd.Series) -> str:
+            merged_locations: List[str] = []
+            for raw_location in locations:
+                if raw_location is None or (isinstance(raw_location, float) and pd.isna(raw_location)):
+                    continue
+                for location_part in str(raw_location).split("|"):
+                    location = location_part.strip()
+                    if location and location not in merged_locations:
+                        merged_locations.append(location)
+            return " | ".join(merged_locations)
+
+        def _merge_duplicate_rows(df: pd.DataFrame, key_builder) -> pd.DataFrame:
+            if df.empty:
+                return df
+
+            grouped = df.copy()
+            grouped["_dedup_key"] = grouped.apply(key_builder, axis=1)
+
+            merged_rows = []
+            for _, group in grouped.groupby("_dedup_key", sort=False, dropna=False):
+                first_row = group.iloc[0].copy()
+                if "location" in group.columns:
+                    merged_location = _merge_locations(group["location"])
+                    if merged_location:
+                        first_row["location"] = merged_location
+                merged_rows.append(first_row)
+
+            merged_df = pd.DataFrame(merged_rows).reset_index(drop=True)
+            return merged_df.drop(columns=["_dedup_key"], errors="ignore")
+
+        def _url_key(row: pd.Series) -> str:
+            normalized_url = _normalize_text(row.get("job_url", ""))
+            return f"url:{normalized_url}" if normalized_url else f"row:{row.name}"
+
+        def _title_company_key(row: pd.Series) -> str:
+            normalized_title = _normalize_text(row.get("title", ""))
+            normalized_company = _normalize_text(row.get("company", ""))
+            if normalized_title and normalized_company:
+                return f"title_company:{normalized_title}|{normalized_company}"
+            return _url_key(row)
+
+        # 1) Exact URL duplicates
+        combined = _merge_duplicate_rows(combined, _url_key)
+        # 2) Same title+company with different URLs (merge locations)
+        combined = _merge_duplicate_rows(combined, _title_company_key)
 
         logger.info(f"📊 Total unique jobs scraped: {len(combined)}")
         return combined
