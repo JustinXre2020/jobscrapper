@@ -97,18 +97,15 @@ HOURS_OLD=24
 ### 4. 运行测试
 
 ```bash
-# 测试模块
-python scraper.py
-
 # 运行完整流程
-python main.py
+python src/main.py
 
 # 代码质量
 ruff check .
 black --check .
 
-# 测试
-pytest tests/
+# 测试（命令行请设置 src 为 source root）
+PYTHONPATH=src pytest tests/
 ```
 
 ---
@@ -117,20 +114,20 @@ pytest tests/
 
 ```text
 jobscrapper/
-├── main.py                    # 主入口
-├── scraper.py                 # 抓取引擎（含增强去重逻辑）
-├── collect_jobs.py            # 批量抓取脚本
-├── config.py                  # 配置解析
-├── filtering/                 # 过滤工作流入口
-├── agent/                     # LangGraph 节点与图
-├── infra/
-│   ├── llm_client.py          # OpenRouter 客户端
-│   └── logging_config.py      # Loguru 统一日志配置
-├── notification/
-│   └── email_sender.py        # 邮件模板与发送
-├── storage/
-│   ├── database.py            # 已发送岗位去重记录
-│   └── data_manager.py        # JSON/CSV 数据管理
+├── src/
+│   ├── main.py                # 主入口
+│   ├── utils/config.py        # 配置解析
+│   ├── infra/
+│   │   ├── scraper.py         # 抓取引擎（python-jobspy）
+│   │   ├── llm_client.py      # OpenRouter 客户端
+│   │   └── logging_config.py  # Loguru 统一日志配置
+│   ├── filtering/             # 过滤工作流入口
+│   ├── agent/                 # LangGraph 节点与图
+│   ├── notification/
+│   │   └── email_sender.py    # 邮件模板与发送
+│   └── storage/
+│       ├── database.py        # 已发送岗位去重记录
+│       └── data_manager.py    # JSON/CSV 数据管理
 ├── tests/
 ├── pyproject.toml
 ├── requirements.txt
@@ -163,7 +160,7 @@ jobscrapper/
 本项目使用 [uv](https://github.com/astral-sh/uv) 进行依赖管理，提供以下优势：
 
 - ⚡ **极速安装**: 比 pip 快 10-100 倍
-- 🔒 **精确锁定**: 通过 `requirements.lock` 确保可重现构建
+- 🔒 **精确锁定**: 通过 `uv.lock` 确保可重现构建
 - 🌐 **兼容性**: 完全兼容 pip 和 PyPI
 - 💾 **缓存优化**: 智能缓存减少网络请求
 
@@ -185,8 +182,8 @@ uv pip install -e . --upgrade
 # 查看已安装包
 uv pip list
 
-# 生成锁定文件
-uv pip freeze > requirements.lock
+# 更新锁定文件
+uv lock
 ```
 
 ### 传统 pip 方式
@@ -263,17 +260,17 @@ pip install -r requirements.txt
 
 ### 调整 Agent 过滤逻辑
 
-- 过滤入口：`filtering/job_filter.py`
-- Agent 节点与图：`agent/`
-- Prompt：`agent/prompts/`
+- 过滤入口：`src/filtering/job_filter.py`
+- Agent 节点与图：`src/agent/`
+- Prompt：`src/agent/prompts/`
 
 ### 修改邮件模板
 
-编辑 `notification/email_sender.py` 中的 `create_email_body()` 与 `create_job_html()`。
+编辑 `src/notification/email_sender.py` 中的 `create_email_body()` 与 `create_job_html()`。
 
 ### 添加更多职位源
 
-在 `scraper.py` 的 `self.sites` 中添加站点（需 `python-jobspy` 支持）。
+在 `src/infra/scraper.py` 的 `self.sites` 中添加站点（需 `python-jobspy` 支持）。
 
 ---
 

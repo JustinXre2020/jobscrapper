@@ -8,7 +8,7 @@ import json
 
 import pytest
 
-from agent.prompts.summarizer_prompt import SUMMARIZER_SYSTEM, build_summarizer_prompt
+from agent.prompts import SUMMARIZER_SYSTEM, build_summarizer_prompt
 from infra.llm_client import LLMClient
 from infra.models import JobSummaryModel
 from infra.json_repair import repair_json

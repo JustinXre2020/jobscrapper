@@ -5,22 +5,23 @@ Supports multi-recipient with per-recipient search terms and sponsorship filteri
 """
 import os
 import sys
-from typing import List, Dict
 from datetime import datetime
+from typing import Dict, List
+
 from dotenv import load_dotenv
-import pandas as pd
 from loguru import logger
+
 from infra.logging_config import configure_logging
 
 # Import custom modules
-from scraper import JobScraper
+from infra.scraper import JobScraper
 from storage.database import JobDatabase
 from notification.email_sender import EmailSender
 from storage.data_manager import DataManager
 
 from filtering.job_filter import OpenRouterLLMFilter
 
-from config import parse_recipients, get_all_search_terms, mask_email, get_results_wanted, get_scrape_queries, DEFAULT_RESULTS_WANTED
+from utils.config import parse_recipients, get_all_search_terms, mask_email, get_results_wanted, get_scrape_queries, DEFAULT_RESULTS_WANTED
 
 load_dotenv()
 

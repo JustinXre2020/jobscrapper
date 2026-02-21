@@ -35,7 +35,7 @@ class OpenRouterLLMFilter:
         use_vector = os.getenv("USE_VECTOR_FEEDBACK", "false").lower() == "true"
         if use_vector:
             try:
-                from infra.embedding_client import EmbeddingClient
+                from infra import EmbeddingClient
 
                 embedding_client = EmbeddingClient()
             except ImportError:

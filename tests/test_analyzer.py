@@ -8,11 +8,11 @@ import json
 
 import pytest
 
-from agent.prompts.analyzer_prompt import ANALYZER_SYSTEM, build_analyzer_prompt
+from agent.prompts import ANALYZER_SYSTEM, build_analyzer_prompt
 from infra.llm_client import LLMClient
 from infra.models import JobEvaluation
 from infra.json_repair import repair_json
-from tests.fixtures.jobs import ALL_FIXTURES, FIXTURE_IDS, JobFixture
+from tests.fixtures.jobs import ALL_FIXTURES, FIXTURE_IDS
 
 # Pre-built "perfect" summaries that match each fixture's expected_summary.
 # This isolates the analyzer from summarizer errors.

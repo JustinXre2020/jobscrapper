@@ -26,7 +26,7 @@ fi
 
 # Install dependencies
 echo "📥 Installing dependencies..."
-uv pip install -e .
+uv sync
 
 # Check if .env exists
 if [ ! -f ".env" ]; then
@@ -47,4 +47,4 @@ echo "To activate the virtual environment, run:"
 echo "  source .venv/bin/activate"
 echo ""
 echo "Then you can run:"
-echo "  python main.py"
+echo "  python src/main.py"
