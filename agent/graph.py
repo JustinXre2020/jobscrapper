@@ -5,7 +5,7 @@ Current topology:
 """
 
 import asyncio
-import logging
+from loguru import logger
 from typing import Any, Dict, List, Optional
 
 from langgraph.graph import END, StateGraph
@@ -15,7 +15,6 @@ from agent.nodes.summarizer import summarizer_node
 from agent.state import AgentState, JobState
 from infra.llm_client import LLMClient
 
-logger = logging.getLogger(__name__)
 
 BOOLEAN_FIELDS = [
     "keyword_match",

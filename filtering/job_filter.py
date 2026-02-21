@@ -5,7 +5,7 @@ Current workflow is strictly per-job:
 """
 
 import asyncio
-import logging
+from loguru import logger
 import os
 from typing import Dict, List, Optional
 
@@ -13,7 +13,6 @@ from agent.feedback.store import create_feedback_store
 from agent.graph import build_graph, run_single_job
 from infra.llm_client import LLMClient
 
-logger = logging.getLogger(__name__)
 
 AGENT_CONCURRENCY = int(os.getenv("AGENT_CONCURRENCY", "50"))
 
@@ -116,7 +115,7 @@ class OpenRouterLLMFilter:
             return evaluation
 
         except Exception as e:
-            logger.error(f"Unexpected error processing {job_title} @ {company}: {e}", exc_info=True)
+            logger.error(f"Unexpected error processing {job_title} @ {company}: {e}")
             return {
                 "keyword_match": True,
                 "visa_sponsorship": True,

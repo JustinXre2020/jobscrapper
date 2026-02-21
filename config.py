@@ -4,14 +4,14 @@ Supports multi-recipient with per-recipient search terms and sponsorship needs
 """
 import os
 import json
-import logging
+from loguru import logger
 from dataclasses import dataclass
 from typing import Dict, List
 from dotenv import load_dotenv
+from infra.logging_config import configure_logging
 
 load_dotenv()
 
-logger = logging.getLogger(__name__)
 
 # --- Search Term Configuration ---
 
@@ -185,7 +185,7 @@ def get_all_search_terms(recipients: List[Recipient]) -> List[str]:
 
 def main():
     """Test configuration parsing"""
-    logging.basicConfig(level=logging.DEBUG)
+    configure_logging(log_file_prefix="config", third_party_levels={})
     logger.info("Testing configuration parsing...")
 
     # Test normalization helpers

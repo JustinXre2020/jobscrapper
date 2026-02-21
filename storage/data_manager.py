@@ -4,14 +4,13 @@ Handles saving, loading, and cleanup of scraped job data
 """
 import os
 import json
-import logging
+from loguru import logger
 import pandas as pd
 from datetime import datetime, date, timedelta
 from pathlib import Path
 from typing import List, Dict, Optional
 import glob
 
-logger = logging.getLogger(__name__)
 
 
 class DateTimeEncoder(json.JSONEncoder):

@@ -1,7 +1,7 @@
 """Analyzer node - evaluates job against criteria using structured summary data."""
 
 import json
-import logging
+from loguru import logger
 from typing import Any, Dict, List, Optional
 
 from infra.llm_client import LLMClient, LLMClientError
@@ -10,7 +10,6 @@ from infra.json_repair import repair_json
 from agent.state import AgentState
 from agent.prompts.analyzer_prompt import ANALYZER_SYSTEM, build_analyzer_prompt
 
-logger = logging.getLogger(__name__)
 
 
 def _deterministic_eval(
@@ -211,5 +210,5 @@ async def analyzer_node(state: AgentState, llm_client: LLMClient) -> Dict[str, A
             }
         return {"error": str(e)}
     except Exception as e:
-        logger.error(f"Analyzer unexpected error [{job_context}]: {e}", exc_info=True)
+        logger.error(f"Analyzer unexpected error [{job_context}]: {e}")
         return {"error": str(e)}

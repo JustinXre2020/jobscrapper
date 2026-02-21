@@ -1,7 +1,7 @@
 """Summarizer node - extracts structured data from raw job descriptions."""
 
 import json
-import logging
+from loguru import logger
 from typing import Any, Dict
 
 import pandas as pd
@@ -12,7 +12,6 @@ from infra.json_repair import repair_json
 from agent.state import AgentState
 from agent.prompts.summarizer_prompt import SUMMARIZER_SYSTEM, build_summarizer_prompt
 
-logger = logging.getLogger(__name__)
 
 
 def _safe_str(value: Any, default: str = "") -> str:
@@ -89,5 +88,5 @@ async def summarizer_node(state: AgentState, llm_client: LLMClient) -> Dict[str,
         logger.warning(f"Summarizer LLM error [{job_context}]: {e}")
         return {"error": str(e)}
     except Exception as e:
-        logger.error(f"Summarizer unexpected error [{job_context}]: {e}", exc_info=True)
+        logger.error(f"Summarizer unexpected error [{job_context}]: {e}")
         return {"error": str(e)}

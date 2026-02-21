@@ -8,7 +8,7 @@ OLD LOCAL INFERENCE LOGIC IS PRESERVED AT THE BOTTOM OF THIS FILE
 import os
 import json
 import asyncio
-import logging
+from loguru import logger
 from typing import Dict, List, Optional, Any
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
@@ -19,7 +19,6 @@ import pandas as pd
 # Load environment variables
 load_dotenv()
 
-logger = logging.getLogger(__name__)
 
 # OpenRouter API Configuration
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1"
@@ -386,7 +385,7 @@ async def evaluate_job_async(
             "company": company,
         }
     except Exception as e:
-        logger.error(f"Unexpected error evaluating job [{job_context}]: {e}", exc_info=True)
+        logger.error(f"Unexpected error evaluating job [{job_context}]: {e}")
         return {
             "keyword_match": True,
             "visa_sponsorship": True,

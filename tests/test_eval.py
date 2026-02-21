@@ -12,7 +12,7 @@ Requires OPENROUTER_API_KEY. Run with:
 
 import asyncio
 import json
-import logging
+from loguru import logger
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, List
@@ -24,7 +24,6 @@ from agent.nodes.analyzer import analyzer_node
 from agent.nodes.summarizer import summarizer_node
 from infra.llm_client import LLMClient
 
-logger = logging.getLogger(__name__)
 
 EVAL_FIELDS = [
     "keyword_match",

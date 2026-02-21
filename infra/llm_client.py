@@ -6,7 +6,7 @@ To migrate to a different provider (e.g., GLM), change only this file.
 
 import asyncio
 import os
-import logging
+from loguru import logger
 from typing import Any, Dict, List, Optional, Type, TypeVar
 
 from dotenv import load_dotenv
@@ -16,7 +16,6 @@ import instructor
 
 load_dotenv()
 
-logger = logging.getLogger(__name__)
 
 T = TypeVar("T", bound=BaseModel)
 

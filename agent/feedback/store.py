@@ -8,13 +8,12 @@ Also provides a factory function to create the appropriate store
 """
 
 import json
-import logging
+from loguru import logger
 import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, List, Optional, Union
 
-logger = logging.getLogger(__name__)
 
 DEFAULT_FEEDBACK_PATH = Path("data/reviewer_feedback.jsonl")
 MAX_FEEDBACK_ENTRIES = 20

@@ -4,7 +4,7 @@ Supports both SQLite and text file storage
 """
 import os
 import json
-import logging
+from loguru import logger
 from pathlib import Path
 from typing import Set, Optional, Dict, List
 from datetime import datetime
@@ -15,7 +15,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-logger = logging.getLogger(__name__)
 
 # Ensure data directory exists
 DATA_DIR = Path(__file__).parent / "data"
