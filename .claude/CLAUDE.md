@@ -13,12 +13,12 @@ Job Hunter Sentinel — an automated job scraping and recommendation system. Scr
 uv venv .venv && source .venv/bin/activate && uv pip install -e .
 
 # Run the full pipeline
-python main.py
+python src/main.py
 
 # Tests (live tests require OPENROUTER_API_KEY env var)
-pytest tests/
-pytest tests/test_summarizer.py -v          # single test file
-TEST_MODELS="liquid/lfm-2.5-1.2b-instruct:free" pytest tests/  # specific model
+PYTHONPATH=src pytest tests/
+PYTHONPATH=src pytest tests/test_summarizer.py -v          # single test file
+TEST_MODELS="liquid/lfm-2.5-1.2b-instruct:free" PYTHONPATH=src pytest tests/  # specific model
 
 # Linting
 ruff check .          # line-length=100, ignores E501
@@ -28,74 +28,52 @@ black --check .       # line-length=100, target py310/py311
 ## File Structure
 
 ```
-main.py                 — Entry point; orchestrates the full pipeline
-config.py               — Multi-recipient config, Recipient dataclass, env var loading
-scraper.py              — Job scraping via python-jobspy (LinkedIn, Indeed, ZipRecruiter)
-
-filtering/              — Job filtering strategies
-├── job_filter.py       — LangGraph agent-based LLM filtering (batch + legacy modes)
-├── llm_filter.py       — OpenRouter single-call LLM filter (legacy)
-├── llm_filter_legacy.py — Rule-based + LLM filtering (legacy)
-└── ai_analyzer.py      — Gemini AI analysis (legacy)
-
-agent/                  — LangGraph workflow (two-level graph)
-├── graph.py            — Inner per-job graph: Summarizer → Parallel Analyzer → Voter
-├── batch_graph.py      — Outer batch graph: Process All → Batch Reviewer → Human Review
-├── state.py            — JobState + BatchState TypedDict definitions
-├── nodes/
-│   ├── summarizer.py       — Extracts structured job metadata via LLM
-│   ├── analyzer.py         — LLM analyzer + deterministic eval + forced CoT + Reflexion feedback
-│   ├── reviewer.py         — Rubric-based strict critic with confidence score + gap list
-│   ├── batch_reviewer.py   — Samples 10 jobs from batch, threshold 2 disagreements
-│   └── human_review.py     — LangGraph interrupt() for CLI human-in-the-loop (uncertain jobs)
-├── prompts/
-│   ├── summarizer_prompt.py
-│   ├── analyzer_prompt.py
-│   └── reviewer_prompt.py
-└── feedback/
-    ├── store.py            — JSONL persistence + create_feedback_store() factory
-    ├── vector_store.py     — Milvus Lite vector store for semantic feedback retrieval
-    └── human_review_store.py — JSON-based human review decisions, categorized by search term
-
-infra/                  — Shared infrastructure
-├── llm_client.py       — AsyncOpenAI + instructor wrapper (OpenRouter), per-call temperature
-├── models.py           — Pydantic schemas (JobSummary, JobEvaluation, ReviewResult, BatchReviewResult, etc.)
-├── embedding_client.py — sentence-transformers wrapper for local embeddings
-└── json_repair.py      — JSON repair utility
+src/
+├── main.py                 — Entry point; orchestrates the full pipeline
+├── utils/config.py         — Multi-recipient config and search-term grouping helpers
+├── infra/
+│   ├── scraper.py          — Job scraping via python-jobspy
+│   ├── llm_client.py       — AsyncOpenAI + instructor wrapper (OpenRouter)
+│   ├── models.py           — Pydantic schemas
+│   ├── logging_config.py   — Centralized Loguru setup
+│   └── json_repair.py      — JSON repair utility
+├── filtering/job_filter.py — LangGraph-driven filtering entrypoint
+├── agent/
+│   ├── graph.py            — Summarizer -> 3x Analyzer ensemble + majority vote
+│   ├── state.py            — TypedDict state for graph execution
+│   ├── nodes/              — Summarizer and Analyzer node implementations
+│   ├── prompts/            — Prompt templates
+│   └── feedback/store.py   — Feedback persistence
+├── notification/email_sender.py
+└── storage/
+    ├── database.py
+    └── data_manager.py
 
 tests/
-├── conftest.py         — Pytest config & fixtures (@pytest.mark.live for API tests)
-├── test_summarizer.py, test_analyzer.py, test_reviewer.py
-└── fixtures/           — Test job data
+├── conftest.py
+├── test_summarizer.py, test_analyzer.py, test_eval.py
+└── fixtures/
 ```
 
 ## Architecture
 
-**Pipeline flow** (orchestrated in `main.py`):
-1. **Scrape** (`scraper.py`) — python-jobspy across LinkedIn, Indeed, ZipRecruiter
-2. **Deduplicate** (`storage/database.py`) — SQLite via SQLAlchemy, fallback to text file
-3. **LLM Filter** — LangGraph agent (`filtering/job_filter.py` + `agent/`) or legacy
-4. **Email** (`notification/email_sender.py`) — Gmail SMTP with per-recipient filtering
-5. **Cleanup** (`storage/data_manager.py`) — JSON/CSV storage, auto-deletes files >7 days
+**Pipeline flow** (orchestrated in `src/main.py`):
+1. **Scrape** (`src/infra/scraper.py`) — python-jobspy across configured sites
+2. **Deduplicate** (`src/storage/database.py`) — SQLite via SQLAlchemy, fallback to text file
+3. **LLM Filter** (`src/filtering/job_filter.py`) — per-job LangGraph workflow
+4. **Email** (`src/notification/email_sender.py`) — Gmail SMTP with per-recipient filtering
+5. **Cleanup** (`src/storage/data_manager.py`) — JSON/CSV storage, auto-deletes files >7 days
 
-**Two-Level LangGraph Architecture (Reflexion):**
-
-Inner graph (per-job, Reflexion loop):
+**Current LangGraph Architecture (single-job ensemble):**
 ```
-[Summarizer] → [Analyzer] → [Reviewer] ──→ END (confidence ≥ 70)
-                    ↑             │ (confidence < 70, retry < max)
-                    └─────────────┘ (with Gap List feedback)
-                    (confidence < 70, retry >= max) → [needs_human_review] → END
+[Summarizer] → [Analyzer x3 in parallel] → [Majority Vote + deterministic overrides] → END
 ```
 
-Outer graph (per-batch):
-```
-[Process All] → [Batch Reviewer] → [Collect Uncertain] → [Human Review] → [Save Decisions] → END
-```
+- Summarizer node: `src/agent/nodes/summarizer.py`
+- Analyzer node: `src/agent/nodes/analyzer.py`
+- Graph assembly + voting: `src/agent/graph.py`
 
-Legacy workflow (USE_LEGACY_WORKFLOW=true): `[Summarizer] → [Analyzer] → [Reviewer] → END`
-
-**Multi-Recipient Architecture** (`config.py`):
+**Multi-Recipient Architecture** (`src/utils/config.py`):
 - `Recipient` dataclass with email, needs_sponsorship flag, per-recipient search_terms
 - `RESULTS_WANTED_MAP` for per-term scrape counts
 - Search term groups (slash-separated → multiple queries)
@@ -105,12 +83,10 @@ Legacy workflow (USE_LEGACY_WORKFLOW=true): `[Summarizer] → [Analyzer] → [Re
 - `GMAIL_EMAIL` / `GMAIL_APP_PASSWORD` — sender credentials
 - `RECIPIENTS` — JSON array of `{email, needs_sponsorship, search_terms}` objects
 - `OPENROUTER_API_KEY` / `OPENROUTER_MODEL` — LLM access
-- `USE_AGENT_WORKFLOW` — `true` for LangGraph agent, `false` for legacy filter
-- `USE_LEGACY_WORKFLOW` — `true` for legacy per-job workflow, `false` for Reflexion batch workflow
-- `REVIEWER_CONFIDENCE_THRESHOLD` — confidence cutoff for Reviewer (default 70)
-- `MAX_ANALYZER_RETRIES` — max retries per job when confidence below threshold (default 1)
-- `ENABLE_HUMAN_REVIEW` — CLI human-in-the-loop for uncertain jobs (disable for CI)
-- `USE_VECTOR_FEEDBACK` — Milvus vector store for semantic feedback
+- `USE_LLM_FILTER` — enable/disable LLM filtering stage
+- `LLM_WORKERS` — parallel worker count for filtering (`0` = auto)
+- `AGENT_CONCURRENCY` — async job concurrency in the filter workflow
+- `USE_VECTOR_FEEDBACK` — enables optional vector feedback init (falls back to JSONL if unavailable)
 - `SEARCH_TERMS`, `LOCATIONS`, `HOURS_OLD`, `SITES` — scraping parameters
 - `DATABASE_URL` — SQLite path or PostgreSQL URI
 

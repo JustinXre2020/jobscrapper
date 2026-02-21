@@ -21,7 +21,7 @@ import pytest
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 
 from agent.nodes.analyzer import analyzer_node
-from agent.nodes.summarizer import summarizer_node
+from agent.nodes import summarizer_node
 from infra.llm_client import LLMClient
 
 

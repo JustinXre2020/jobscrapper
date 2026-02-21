@@ -12,7 +12,7 @@ from typing import List, Dict, Optional, Union
 from datetime import datetime
 from dotenv import load_dotenv
 
-from config import Recipient, parse_recipients
+from utils.config import Recipient, parse_recipients
 
 load_dotenv()
 

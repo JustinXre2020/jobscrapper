@@ -55,7 +55,7 @@ jobs:
           SITES: ${{ vars.SITES }}
         run: |
           source .venv/bin/activate
-          python main.py
+          python src/main.py
 
       - name: Upload execution logs
         if: always()
