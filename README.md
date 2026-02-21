@@ -1,81 +1,81 @@
 # 🎯 Job Hunter Sentinel
 
-一个端到端的自动化职位抓取与推荐系统，适用于求职场景。系统会抓取职位、去重、LLM 筛选并按收件人发送职位摘要邮件。
+An end-to-end automated job scraping and recommendation system. It collects jobs from multiple boards, deduplicates them, filters them with an LLM workflow, and sends curated email digests to recipients.
 
-## ✨ 核心功能
+## ✨ Core Features
 
-- 🔍 **多源抓取**: 聚合 LinkedIn、Indeed、ZipRecruiter、Google Jobs
-- 🤖 **LLM 智能筛选**: 基于 LangGraph + OpenRouter 的结构化评估流程
-- 📧 **邮件推送**: 每日发送 HTML 职位摘要（标题/公司/地点/链接，**不包含职位描述正文**）
-- 🗑️ **增强去重**: 先按 `job_url` 去重，再按 `title + company` 合并重复岗位并合并地点
-- 💾 **本地数据存储**: 抓取数据自动保存为 JSON/CSV，已发送记录保存在数据库
-- 🪵 **统一日志**: 全项目使用 Loguru，文件与控制台日志格式统一
-- ⏰ **自动调度**: 支持本地执行与 GitHub Actions 定时运行（每日 1 次，1:00 PM EST）
-- 🛡️ **异常处理**: 429 速率限制自动退避，空结果会发送友好通知
+- 🔍 **Multi-source scraping**: Aggregates jobs from LinkedIn, Indeed, ZipRecruiter, and Google Jobs
+- 🤖 **LLM-based filtering**: Uses LangGraph + OpenRouter for structured evaluation
+- 📧 **Email delivery**: Sends daily HTML digests (title/company/location/link, **no full job description body**)
+- 🗑️ **Enhanced deduplication**: Deduplicates by `job_url`, then merges duplicates by `title + company` and combines locations
+- 💾 **Local data storage**: Saves scraped results as JSON/CSV and stores sent-job records in the database
+- 🪵 **Unified logging**: Uses Loguru with consistent console/file output
+- ⏰ **Scheduled automation**: Supports local runs and scheduled GitHub Actions runs (daily at 1:00 PM EST)
+- 🛡️ **Error handling**: Retries with backoff on 429 rate limits and sends friendly empty-result notifications
 
 ---
 
-## 📋 环境要求
+## 📋 Requirements
 
 - **Python**: 3.13+
-- **包管理器**: [uv](https://github.com/astral-sh/uv) (推荐) 或 pip
-- **必要配置**:
+- **Package manager**: [uv](https://github.com/astral-sh/uv) (recommended) or pip
+- **Required configuration**:
   - `OPENROUTER_API_KEY`
   - `GMAIL_EMAIL` / `GMAIL_APP_PASSWORD`
 
 ---
 
-## 🚀 快速开始
+## 🚀 Quick Start
 
-### 方法 1: 一键安装脚本 (推荐)
+### Method 1: One-step setup script (Recommended)
 
 ```bash
 cd jobscrapper
 ./setup.sh
 ```
 
-这个脚本会自动：
-- 安装 uv (如果未安装)
-- 创建虚拟环境
-- 安装所有依赖
-- 复制 `.env.example` 到 `.env` (如果不存在)
+This script automatically:
+- Installs uv (if missing)
+- Creates a virtual environment
+- Installs dependencies
+- Copies `.env.example` to `.env` (if missing)
 
-### 方法 2: 手动安装
+### Method 2: Manual setup
 
-#### 1. 安装 uv (如果尚未安装)
+#### 1) Install uv (if needed)
 
 ```bash
 # macOS/Linux
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# 或使用 pip
+# or with pip
 pip install uv
 ```
 
-#### 2. 安装依赖
+#### 2) Install dependencies
 
 ```bash
 cd jobscrapper
 
-# 使用 uv 创建虚拟环境并安装依赖
+# Create venv and install project in editable mode
 uv venv .venv
 uv pip install -e .
 
-# 激活虚拟环境
-source .venv/bin/activate  # Linux/Mac
-# 或
+# Activate virtual environment
+source .venv/bin/activate  # Linux/macOS
+# or
 .venv\Scripts\activate  # Windows
 ```
 
-### 3. 配置环境变量
+#### 3) Configure environment variables
 
-复制 `.env.example` 为 `.env` 并填写：
+Copy `.env.example` to `.env` and fill in values:
 
 ```bash
 cp .env.example .env
 ```
 
-编辑 `.env` 文件：
+Edit `.env`:
 
 ```env
 # Email
@@ -94,40 +94,40 @@ RESULTS_WANTED=20
 HOURS_OLD=24
 ```
 
-### 4. 运行测试
+#### 4) Run checks and the pipeline
 
 ```bash
-# 运行完整流程
+# Run full pipeline
 python src/main.py
 
-# 代码质量
+# Code quality
 ruff check .
 black --check .
 
-# 测试（命令行请设置 src 为 source root）
+# Tests (set src as source root in CLI environments)
 PYTHONPATH=src pytest tests/
 ```
 
 ---
 
-## 📁 项目结构
+## 📁 Project Structure
 
 ```text
 jobscrapper/
 ├── src/
-│   ├── main.py                # 主入口
-│   ├── utils/config.py        # 配置解析
+│   ├── main.py                # Main entry point
+│   ├── utils/config.py        # Configuration parsing
 │   ├── infra/
-│   │   ├── scraper.py         # 抓取引擎（python-jobspy）
-│   │   ├── llm_client.py      # OpenRouter 客户端
-│   │   └── logging_config.py  # Loguru 统一日志配置
-│   ├── filtering/             # 过滤工作流入口
-│   ├── agent/                 # LangGraph 节点与图
+│   │   ├── scraper.py         # Scraper engine (python-jobspy)
+│   │   ├── llm_client.py      # OpenRouter client
+│   │   └── logging_config.py  # Unified Loguru logging
+│   ├── filtering/             # Filtering workflow entry
+│   ├── agent/                 # LangGraph nodes and graph
 │   ├── notification/
-│   │   └── email_sender.py    # 邮件模板与发送
+│   │   └── email_sender.py    # Email template + delivery
 │   └── storage/
-│       ├── database.py        # 已发送岗位去重记录
-│       └── data_manager.py    # JSON/CSV 数据管理
+│       ├── database.py        # Sent-job deduplication records
+│       └── data_manager.py    # JSON/CSV data management
 ├── tests/
 ├── pyproject.toml
 ├── requirements.txt
@@ -136,172 +136,83 @@ jobscrapper/
 
 ---
 
-## ⚙️ 配置说明
+## ⚙️ Configuration
 
-### 环境变量详解
+### Environment Variables
 
-| 变量名 | 说明 | 示例 |
-|--------|------|------|
-| `OPENROUTER_API_KEY` | OpenRouter API 密钥 | `sk-or-...` |
-| `OPENROUTER_MODEL` | 模型标识 | `liquid/lfm-2.5-1.2b-instruct:free` |
-| `GMAIL_EMAIL` | 发件邮箱 | `you@gmail.com` |
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `OPENROUTER_API_KEY` | OpenRouter API key | `sk-or-...` |
+| `OPENROUTER_MODEL` | Model identifier | `liquid/lfm-2.5-1.2b-instruct:free` |
+| `GMAIL_EMAIL` | Sender email | `you@gmail.com` |
 | `GMAIL_APP_PASSWORD` | Gmail App Password | `xxxx xxxx xxxx xxxx` |
-| `RECIPIENTS` | 收件人 JSON 配置 | `[{"email":"a@b.com",...}]` |
-| `SEARCH_TERMS` | 搜索关键词（逗号分隔） | `software engineer,data engineer` |
-| `LOCATIONS` | 搜索地点（逗号分隔） | `San Francisco, CA,New York, NY` |
-| `RESULTS_WANTED` | 每个查询返回数 | `20` |
-| `HOURS_OLD` | 职位时间窗口（小时） | `24` |
-
-
----
-
-## 🔧 依赖管理
-
-本项目使用 [uv](https://github.com/astral-sh/uv) 进行依赖管理，提供以下优势：
-
-- ⚡ **极速安装**: 比 pip 快 10-100 倍
-- 🔒 **精确锁定**: 通过 `uv.lock` 确保可重现构建
-- 🌐 **兼容性**: 完全兼容 pip 和 PyPI
-- 💾 **缓存优化**: 智能缓存减少网络请求
-
-### uv 常用命令
-
-```bash
-# 创建虚拟环境
-uv venv .venv
-
-# 安装依赖
-uv pip install -e .
-
-# 添加新依赖
-uv pip install package-name
-
-# 更新所有依赖
-uv pip install -e . --upgrade
-
-# 查看已安装包
-uv pip list
-
-# 更新锁定文件
-uv lock
-```
-
-### 传统 pip 方式
-
-如果不想使用 uv，仍可使用传统 pip：
-
-```bash
-python -m venv .venv
-source .venv/bin/activate  # Linux/Mac
-pip install -r requirements.txt
-```
+| `RECIPIENTS` | Recipient JSON config | `[{"email":"a@b.com",...}]` |
+| `SEARCH_TERMS` | Search keywords (comma-separated) | `software engineer,data engineer` |
+| `LOCATIONS` | Search locations (comma-separated) | `San Francisco, CA,New York, NY` |
+| `RESULTS_WANTED` | Results per query | `20` |
+| `HOURS_OLD` | Job age window (hours) | `24` |
 
 ---
 
-## 🤖 GitHub Actions 自动化
-
-当前 workflow 文件：`.github/workflows/job_hunter.yml`
-
-- `schedule`: `0 18 * * *`（UTC 18:00 = 1:00 PM EST）
-- `workflow_dispatch`: 支持手动触发
-
-建议在仓库 Secrets 中配置：
-
-- `OPENROUTER_API_KEY`
-- `GMAIL_EMAIL`
-- `GMAIL_APP_PASSWORD`
-- `RECIPIENTS`
-
----
-
-## 📊 工作流程
+## 📊 Pipeline Flow
 
 ```text
-1) 抓取职位（多站点）
-2) 抓取结果去重（job_url + title/company，合并 location）
-3) 过滤历史已发送岗位
-4) LLM 结构化评估筛选
-5) 按收件人规则生成邮件并发送
-6) 标记已发送并清理过期数据
+1) Scrape jobs from multiple sites
+2) Deduplicate scraped jobs (job_url + title/company merge)
+3) Filter out already-sent jobs
+4) Run LLM-based structured filtering
+5) Build per-recipient email digest and send
+6) Mark sent jobs and clean old data
 ```
 
 ---
 
-## 🎨 邮件样式
+## 🔧 Advanced Configuration
 
-邮件模板包含：
+### Adjust agent filtering logic
 
-- 🎯 渐变色标题
-- 📊 职位数量统计
-- 🏢 公司 + 📍地点
-- 🟢/🔴 签证信息徽章
-- 🔗 一键查看详情链接
+- Filtering entry: `src/filtering/job_filter.py`
+- Agent nodes and graph: `src/agent/`
+- Prompts: `src/agent/prompts/`
 
-> 说明：邮件中不再包含职位描述正文。
+### Modify email templates
 
----
+Edit `src/notification/email_sender.py` (`create_email_body()` and `create_job_html()`).
 
-## 🛠️ 异常处理
+### Add more scraping sources
 
-### 429 速率限制
-
-自动实现指数退避 (Exponential Backoff):
-- 第 1 次重试: 等待 2 秒
-- 第 2 次重试: 等待 4 秒
-- 第 3 次重试: 等待 8 秒
-
-### 空结果处理
-
-当无符合条件的职位时，发送友好的"今日无新职位"通知，避免误以为系统失效。
+Update `self.sites` in `src/infra/scraper.py` (must be supported by `python-jobspy`).
 
 ---
 
-## 🔧 高级配置
+## 📝 Acceptance Checklist
 
-### 调整 Agent 过滤逻辑
-
-- 过滤入口：`src/filtering/job_filter.py`
-- Agent 节点与图：`src/agent/`
-- Prompt：`src/agent/prompts/`
-
-### 修改邮件模板
-
-编辑 `src/notification/email_sender.py` 中的 `create_email_body()` 与 `create_job_html()`。
-
-### 添加更多职位源
-
-在 `src/infra/scraper.py` 的 `self.sites` 中添加站点（需 `python-jobspy` 支持）。
+- [x] Jobs are scraped successfully (`Found X jobs` in logs)
+- [x] LLM analysis produces structured and reasonable evaluation output
+- [x] Deduplication prevents duplicate emails across repeated runs
+- [x] Emails are delivered with clean formatting
+- [x] 429 retries work automatically
+- [x] Empty-result notifications are sent correctly
 
 ---
 
-## 📝 验收标准
+## 🤝 Contributing
 
-- [x] 成功抓取职位 (控制台显示 `Found X jobs`)
-- [x] AI 解析生成中文摘要和合理评分
-- [x] 去重功能有效 (连续运行不发送重复邮件)
-- [x] 邮件到达收件箱，排版整齐
-- [x] 429 错误自动重试
-- [x] 空结果发送友好通知
-
----
-
-## 🤝 贡献指南
-
-1. Fork 本仓库
-2. 创建特性分支 (`git checkout -b feature/AmazingFeature`)
-3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
-4. 推送到分支 (`git push origin feature/AmazingFeature`)
-5. 开启 Pull Request
+1. Fork this repository
+2. Create a feature branch (`git checkout -b feature/AmazingFeature`)
+3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
+4. Push your branch (`git push origin feature/AmazingFeature`)
+5. Open a Pull Request
 
 ---
 
-## 📄 许可证
+## 📄 License
 
-本项目采用 MIT 许可证 - 详见 [LICENSE](../../LICENSE) 文件
+This project is licensed under MIT. See [LICENSE](LICENSE).
 
 ---
 
-## 🙏 致谢
+## 🙏 Acknowledgements
 
 - [python-jobspy](https://github.com/Bunsly/JobSpy)
 - [OpenRouter](https://openrouter.ai/)
@@ -310,9 +221,9 @@ pip install -r requirements.txt
 
 ---
 
-## 📞 支持
+## 📞 Support
 
-遇到问题？请创建 [Issue](https://github.com/srbhr/Resume-Matcher/issues) 或参考主项目文档。
+If you run into issues, open an issue in this repository and include logs/config details (with secrets removed).
 
 ---
 

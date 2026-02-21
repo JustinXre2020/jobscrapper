@@ -90,15 +90,18 @@ def _wrap_analyzer_ensemble(llm_client: LLMClient):
                 continue
             analyzer_results.append(item)
 
+        # Fail fast when every parallel analyzer call fails.
         if not analyzer_results:
             return {"error": f"All analyzer calls failed [{job_context}]"}
 
         evaluation = _majority_vote_evaluation(analyzer_results)
 
+        # Deterministic rules override model votes when explicit signals are present.
         for field, value in deterministic.items():
             if value is not None:
                 evaluation[field] = value
 
+        # Keep a human-readable reason from the nearest analyzer output.
         evaluation["reason"] = _pick_closest_reason(analyzer_results, evaluation)
         evaluation["job_title"] = job_title
         evaluation["company"] = company
