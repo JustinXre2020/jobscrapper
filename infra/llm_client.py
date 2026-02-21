@@ -82,6 +82,7 @@ class LLMClient:
         messages: List[Dict[str, str]],
         response_model: Type[T],
         job_context: Optional[str] = None,
+        temperature: Optional[float] = None,
     ) -> T:
         """Call the LLM and return a validated Pydantic instance.
 
@@ -98,6 +99,7 @@ class LLMClient:
         Raises:
             LLMClientError: On API failures including rate limiting.
         """
+        effective_temp = temperature if temperature is not None else self.temperature
         context_str = f" [{job_context}]" if job_context else ""
         user_prompt = next((m["content"] for m in messages if m["role"] == "user"), "")
         logger.debug(f"LLM_STRUCTURED{context_str}:\n{'-'*60}\n{user_prompt[:500]}\n{'-'*60}")
@@ -108,7 +110,7 @@ class LLMClient:
                 response = await self._instructor_client.chat.completions.create(
                     model=self.model,
                     messages=messages,
-                    temperature=self.temperature,
+                    temperature=effective_temp,
                     max_tokens=self.max_tokens,
                     response_model=response_model,
                 )
@@ -143,6 +145,7 @@ class LLMClient:
         self,
         messages: List[Dict[str, str]],
         job_context: Optional[str] = None,
+        temperature: Optional[float] = None,
     ) -> str:
         """Call the LLM and return raw text response.
 
@@ -158,6 +161,7 @@ class LLMClient:
         Raises:
             LLMClientError: On API failures including rate limiting.
         """
+        effective_temp = temperature if temperature is not None else self.temperature
         context_str = f" [{job_context}]" if job_context else ""
         user_prompt = next((m["content"] for m in messages if m["role"] == "user"), "")
         logger.debug(f"LLM_TEXT{context_str}:\n{'-'*60}\n{user_prompt[:500]}\n{'-'*60}")
@@ -168,7 +172,7 @@ class LLMClient:
                 response = await self._raw_client.chat.completions.create(
                     model=self.model,
                     messages=messages,
-                    temperature=self.temperature,
+                    temperature=effective_temp,
                     max_tokens=self.max_tokens,
                 )
                 return response.choices[0].message.content

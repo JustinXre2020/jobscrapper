@@ -1,19 +1,19 @@
-"""Agent state definition for the LangGraph workflow."""
+"""Agent state definitions for the LangGraph workflow."""
 
 from typing import Any, Dict, List, Optional, TypedDict
 
 
-class AgentState(TypedDict):
-    """State passed between nodes in the LangGraph workflow."""
+class JobState(TypedDict):
+    """State passed between nodes in the per-job graph."""
 
     job: Dict[str, Any]
     search_terms: List[str]
     summary: Optional[Dict[str, Any]]
     evaluation: Optional[Dict[str, Any]]
-    review_passed: Optional[bool]
-    review_feedback: Optional[str]
-    retry_count: int
-    max_retries: int
     accumulated_feedback: List[str]
     error: Optional[str]
     skipped: bool
+
+
+# Backwards compatibility alias
+AgentState = JobState

@@ -1,8 +1,4 @@
-"""Prompt template for the Analyzer node.
-
-Migrated from llm_filter.py _create_prompt(), adapted to operate on
-structured JobSummary data instead of raw description text.
-"""
+"""Prompt template for the Analyzer node."""
 
 from typing import Dict, List, Optional
 
@@ -18,15 +14,15 @@ def build_analyzer_prompt(
     summary: Dict,
     search_terms: List[str],
     accumulated_feedback: Optional[List[str]] = None,
-    review_feedback: Optional[str] = None,
+    job: Optional[Dict] = None,
 ) -> str:
     """Build the user prompt for the Analyzer node.
 
     Args:
         summary: Structured JobSummaryModel data (dict).
         search_terms: Target roles to match against.
-        accumulated_feedback: Historic reviewer corrections to improve accuracy.
-        review_feedback: Specific feedback from the Reviewer on a retry.
+        accumulated_feedback: Historic corrections to improve accuracy.
+        job: Raw job dict with original title/company for cross-checking.
 
     Returns:
         Formatted user prompt string.
@@ -35,16 +31,24 @@ def build_analyzer_prompt(
 
     # Build feedback section if any corrections exist
     feedback_section = ""
-    if review_feedback:
-        feedback_section += f"""
-### REVIEWER CORRECTION (address this in your analysis)
-{review_feedback}
-"""
     if accumulated_feedback:
         corrections = "\n".join(f"- {fb}" for fb in accumulated_feedback[-20:])
         feedback_section += f"""
 ### PAST CORRECTIONS (avoid these mistakes)
 {corrections}
+"""
+
+    # Build original job context section if raw job is available
+    original_context = ""
+    if job:
+        orig_title = job.get("title", "")
+        orig_company = job.get("company", "")
+        if orig_title or orig_company:
+            original_context = f"""
+### ORIGINAL POSTING CONTEXT
+Original Job Title: {orig_title}
+Company: {orig_company}
+(Use this to cross-check the summarizer's seniority_level and title normalization.)
 """
 
     return f"""### STRUCTURED JOB DATA
@@ -57,6 +61,7 @@ Is Internship/Co-op: {summary.get('is_internship_coop', False)}
 Visa Statements: {summary.get('visa_statements', [])}
 Key Requirements: {summary.get('key_requirements', [])}
 Description Summary: {summary.get('description_summary', '')}
+{original_context}
 
 Target Roles: [{search_terms_str}]
 {feedback_section}
@@ -98,6 +103,15 @@ Using the structured data above, evaluate the job on these criteria:
 5. **requires_phd**: (true/false)
    - Check education_required field.
    - Return TRUE only if education_required is "phd" (mandatory, not preferred).
+
+### REASONING PROCESS (mandatory)
+Before giving your final JSON answer, you MUST think through each criterion step by step:
+1. List the target roles. Does the normalized title match any? Why or why not?
+2. What do the visa_statements say? Quote the exact phrases.
+3. What is the seniority level and years required? Is this entry-level?
+4. What education is required? Is PhD mandatory?
+5. Is this an internship/co-op/fellowship?
+After reflecting, output your JSON.
 
 ### OUTPUT FORMAT
 Respond ONLY with valid JSON:

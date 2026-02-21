@@ -38,6 +38,12 @@ async def summarizer_node(state: AgentState, llm_client: LLMClient) -> Dict[str,
     company = job.get("company", "Unknown")
     job_context = f"{job_title} @ {company}"
 
+    # On redo passes, summary is already populated — skip re-extraction
+    existing_summary = state.get("summary")
+    if existing_summary:
+        logger.debug(f"Skipping summarizer for {job_context} — summary already exists (redo pass)")
+        return {"summary": existing_summary}
+
     # Skip jobs with no/short description
     desc = _safe_str(job.get("description"), "")
     if not desc or len(desc) < 50:
