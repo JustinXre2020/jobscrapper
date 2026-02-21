@@ -1,28 +1,27 @@
 # 🎯 Job Hunter Sentinel
 
-一个端到端的自动化职位抓取与推荐系统，专为 O-1 签证申请人设计。利用 AI 智能分析职位友好度，每日自动推送高匹配度岗位。
+一个端到端的自动化职位抓取与推荐系统，适用于求职场景。系统会抓取职位、去重、LLM 筛选并按收件人发送职位摘要邮件。
 
 ## ✨ 核心功能
 
 - 🔍 **多源抓取**: 聚合 LinkedIn、Indeed、ZipRecruiter、Google Jobs
-- 🤖 **AI 智能评分**: 使用 Gemini 1.5 Flash 分析职位对 O-1 签证的友好度
-- 📧 **精美邮件推送**: 每日发送排版整齐的 HTML 职位精选
-- 🗑️ **自动去重**: 基于 URL 的智能去重，避免重复推送
-- 💾 **本地数据存储**: 所有抓取数据自动保存为 JSON/CSV 格式
-- ⏰ **定时任务**: 每天 8点、12点、18点自动运行（支持本地 Cron 和 GitHub Actions）
-- 🗂️ **自动清理**: 超过 7 天的数据自动删除
-- ⏰ **定时任务**: GitHub Actions 每日自动运行
-- 🛡️ **异常处理**: 429 速率限制自动退避，空结果友好通知
+- 🤖 **LLM 智能筛选**: 基于 LangGraph + OpenRouter 的结构化评估流程
+- 📧 **邮件推送**: 每日发送 HTML 职位摘要（标题/公司/地点/链接，**不包含职位描述正文**）
+- 🗑️ **增强去重**: 先按 `job_url` 去重，再按 `title + company` 合并重复岗位并合并地点
+- 💾 **本地数据存储**: 抓取数据自动保存为 JSON/CSV，已发送记录保存在数据库
+- 🪵 **统一日志**: 全项目使用 Loguru，文件与控制台日志格式统一
+- ⏰ **自动调度**: 支持本地执行与 GitHub Actions 定时运行（每日两次）
+- 🛡️ **异常处理**: 429 速率限制自动退避，空结果会发送友好通知
 
 ---
 
 ## 📋 环境要求
 
-- **Python**: 3.10+
+- **Python**: 3.13+
 - **包管理器**: [uv](https://github.com/astral-sh/uv) (推荐) 或 pip
-- **API Keys**: 
-  - [Google AI Studio](https://makersuite.google.com/app/apikey) (Gemini API)
-  - [Resend](https://resend.com/api-keys) (邮件服务)
+- **必要配置**:
+  - `OPENROUTER_API_KEY`
+  - `GMAIL_EMAIL` / `GMAIL_APP_PASSWORD`
 
 ---
 
@@ -31,7 +30,7 @@
 ### 方法 1: 一键安装脚本 (推荐)
 
 ```bash
-cd apps/jobsrapper
+cd jobscrapper
 ./setup.sh
 ```
 
@@ -56,7 +55,7 @@ pip install uv
 #### 2. 安装依赖
 
 ```bash
-cd apps/jobsrapper
+cd jobscrapper
 
 # 使用 uv 创建虚拟环境并安装依赖
 uv venv .venv
@@ -79,78 +78,63 @@ cp .env.example .env
 编辑 `.env` 文件：
 
 ```env
-# API Keys
-GEMINI_API_KEY=your_gemini_api_key_here
-RESEND_API_KEY=your_resend_api_key_here
-RECIPIENT_EMAIL=your_email@example.com
+# Email
+GMAIL_EMAIL=your_email@gmail.com
+GMAIL_APP_PASSWORD=your_gmail_app_password
+RECIPIENTS=[{"email":"you@example.com","needs_sponsorship":true,"search_terms":["software engineer"]}]
 
-# 数据库配置（本地测试用 SQLite）
-DATABASE_URL=sqlite:///./jobs.db
+# LLM
+OPENROUTER_API_KEY=your_openrouter_api_key_here
+OPENROUTER_MODEL=liquid/lfm-2.5-1.2b-instruct:free
 
-# 搜索配置
-SEARCH_TERMS=software engineer,senior software engineer,machine learning engineer
-LOCATIONS=San Francisco CA,New York NY,Seattle WA
+# Scraping
+SEARCH_TERMS=software engineer,data engineer
+LOCATIONS=San Francisco, CA,New York, NY
 RESULTS_WANTED=20
 HOURS_OLD=24
-MIN_SCORE=6
 ```
 
 ### 4. 运行测试
 
 ```bash
-# 确保虚拟环境已激活
-source .venv/bin/activate
-
-# 测试各模块
-
-```bash
-# 测试各模块
-python scraper.py        # 测试职位抓取
-python ai_analyzer.py    # 测试 AI 分析
-python database.py       # 测试数据库
-python email_sender.py   # 测试邮件发送
-python data_manager.py   # 测试数据管理
+# 测试模块
+python scraper.py
 
 # 运行完整流程
 python main.py
-```
 
-### 5. 设置定时任务（可选）
+# 代码质量
+ruff check .
+black --check .
 
-```bash
-# 安装本地 cron 定时任务（每天 8点、12点、18点运行）
-./install_cron.sh
-
-# 查看已安装的任务
-crontab -l
-
-# 卸载定时任务
-./uninstall_cron.sh
+# 测试
+pytest tests/
 ```
 
 ---
 
 ## 📁 项目结构
 
-```
-jobsrapper/
-├── main.py              # 主程序入口
-├── scraper.py           # 职位抓取引擎
-├── ai_analyzer.py       # Gemini AI 分析器
-├── database.py          # 去重与持久化
-├── email_sender.py      # 邮件发送模块
-├── data_manager.py      # 数据存储管理 (NEW)
-├── scraper.py           # 职位抓取引擎
-├── ai_analyzer.py       # Gemini AI 分析器
-├── database.py          # 去重与持久化
-├── email_sender.py      # 邮件发送模块
-├── pyproject.toml       # 项目配置和依赖管理 (uv)
-├── requirements.txt     # 传统依赖列表 (向后兼容)
-├── requirements.lock    # 锁定的依赖版本
-├── .venv/               # 虚拟环境目录 (git 忽略)
-├── .env.example         # 环境变量模板
-├── .gitignore           # Git 忽略规则
-└── README.md            # 本文档
+```text
+jobscrapper/
+├── main.py                    # 主入口
+├── scraper.py                 # 抓取引擎（含增强去重逻辑）
+├── collect_jobs.py            # 批量抓取脚本
+├── config.py                  # 配置解析
+├── filtering/                 # 过滤工作流入口
+├── agent/                     # LangGraph 节点与图
+├── infra/
+│   ├── llm_client.py          # OpenRouter 客户端
+│   └── logging_config.py      # Loguru 统一日志配置
+├── notification/
+│   └── email_sender.py        # 邮件模板与发送
+├── storage/
+│   ├── database.py            # 已发送岗位去重记录
+│   └── data_manager.py        # JSON/CSV 数据管理
+├── tests/
+├── pyproject.toml
+├── requirements.txt
+└── README.md
 ```
 
 ---
@@ -161,15 +145,21 @@ jobsrapper/
 
 | 变量名 | 说明 | 示例 |
 |--------|------|------|
-| `GEMINI_API_KEY` | Google AI Studio 密钥 | `AIza...` |
-| `RESEND_API_KEY` | Resend 邮件服务密钥 | `re_...` |
-| `RECIPIENT_EMAIL` | 接收通知的邮箱 | `you@example.com` |
-| `DATABASE_URL` | 数据库连接（SQLite/Supabase） | `sqlite:///./jobs.db` |
+| `OPENROUTER_API_KEY` | OpenRouter API 密钥 | `sk-or-...` |
+| `OPENROUTER_MODEL` | 模型标识 | `liquid/lfm-2.5-1.2b-instruct:free` |
+| `GMAIL_EMAIL` | 发件邮箱 | `you@gmail.com` |
+| `GMAIL_APP_PASSWORD` | Gmail App Password | `xxxx xxxx xxxx xxxx` |
+| `RECIPIENTS` | 收件人 JSON 配置 | `[{"email":"a@b.com",...}]` |
+| `SEARCH_TERMS` | 搜索关键词（逗号分隔） | `software engineer,data engineer` |
+| `LOCATIONS` | 搜索地点（逗号分隔） | `San Francisco, CA,New York, NY` |
+| `RESULTS_WANTED` | 每个查询返回数 | `20` |
+| `HOURS_OLD` | 职位时间窗口（小时） | `24` |
+
+--------|------|------|
 | `SEARCH_TERMS` | 职位关键词（逗号分隔） | `software engineer,ml engineer` |
 | `LOCATIONS` | 搜索地点（逗号分隔） | `San Francisco CA,NYC` |
 | `RESULTS_WANTED` | 每个搜索返回结果数 | `20` |
 | `HOURS_OLD` | 职位时间窗口（小时） | `24` |
-| `MIN_SCORE` | 最低推荐分数（1-10） | `6` |
 
 ---
 
@@ -216,84 +206,30 @@ pip install -r requirements.txt
 
 ---
 
-## 🤖 GitHub Actions 自动化
-
-### 配置步骤
-
-1. **添加 Secrets** (Settings → Secrets and variables → Actions → New repository secret):
-   - `GEMINI_API_KEY`
-   - `RESEND_API_KEY`
-   - `RECIPIENT_EMAIL`
-   - `DATABASE_URL` (可选)
-
-2. **添加 Variables** (Settings → Secrets and variables → Actions → Variables):
-   - `SEARCH_TERMS` (默认: `software engineer`)
-   - `LOCATIONS` (默认: `San Francisco, CA`)
-   - `RESULTS_WANTED` (默认: `20`)
-   - `HOURS_OLD` (默认: `24`)
-   - `MIN_SCORE` (默认: `6`)
-
-3. **启用 Workflow**:
-   - 进入 Actions 标签页
-   - 找到 "Job Hunter Sentinel Daily Run"
-   - 点击 "Enable workflow"
-
-### 运行时间
-
-默认每天 **UTC 13:00** 运行 (北京时间晚上 9 点 / 美东早上 6 点)
-
-可在 `.github/workflows/job_hunter.yml` 中修改 `cron` 表达式：
-
-```yaml
-schedule:
-  - cron: '0 13 * * *'  # 分 时 日 月 星期
-```
-
-### 手动触发
-
-在 Actions 页面点击 "Run workflow" 按钮即可立即执行。
-
----
-
 ## 📊 工作流程
 
-```
-┌─────────────────┐
-│  1. 抓取职位    │  → 多源聚合 (LinkedIn, Indeed, etc.)
-└────────┬────────┘
-         ↓
-┌─────────────────┐
-│  2. AI 分析     │  → Gemini 评估 O-1 签证友好度 (1-10分)
-└────────┬────────┘
-         ↓
-┌─────────────────┐
-│  3. 分数过滤    │  → 保留高分职位 (>= MIN_SCORE)
-└────────┬────────┘
-         ↓
-┌─────────────────┐
-│  4. 去重检查    │  → 数据库查询，过滤已发送职位
-└────────┬────────┘
-         ↓
-┌─────────────────┐
-│  5. 邮件推送    │  → 精美 HTML 格式邮件
-└────────┬────────┘
-         ↓
-┌─────────────────┐
-│  6. 标记已发送  │  → 写入数据库，防止重复
-└─────────────────┘
+```text
+1) 抓取职位（多站点）
+2) 抓取结果去重（job_url + title/company，合并 location）
+3) 过滤历史已发送岗位
+4) LLM 结构化评估筛选
+5) 按收件人规则生成邮件并发送
+6) 标记已发送并清理过期数据
 ```
 
 ---
 
 ## 🎨 邮件样式
 
-邮件采用现代化设计，包含：
+邮件模板包含：
 
 - 🎯 渐变色标题
 - 📊 职位数量统计
-- ⭐ 分数色彩编码 (8+ 绿色强推, 6-7 蓝色推荐)
-- 💡 AI 推荐理由高亮
-- 🔗 一键直达申请链接
+- 🏢 公司 + 📍地点
+- 🟢/🔴 签证信息徽章
+- 🔗 一键查看详情链接
+
+> 说明：邮件中不再包含职位描述正文。
 
 ---
 
@@ -310,43 +246,23 @@ schedule:
 
 当无符合条件的职位时，发送友好的"今日无新职位"通知，避免误以为系统失效。
 
-### 数据库降级
-
-如果 SQLite/Supabase 连接失败，自动降级到本地文本文件 (`sent_jobs.txt`)。
-
----
-
-## 📈 性能与成本
-
-- **抓取速度**: 约 5-10 秒/查询 (含礼貌性延迟)
-- **AI 分析**: 约 1-2 秒/职位 (Gemini 1.5 Flash)
-- **邮件发送**: < 1 秒
-- **总耗时**: 典型运行 2-5 分钟 (20 个职位)
-- **API 成本**: 
-  - Gemini: 免费额度充足 (60 requests/min)
-  - Resend: 免费 100 封/天
-
 ---
 
 ## 🔧 高级配置
 
-### 使用 Supabase 数据库
+### 调整 Agent 过滤逻辑
 
-```env
-DATABASE_URL=postgresql://user:pass@host.supabase.co:5432/postgres
-```
-
-### 调整 AI 评分标准
-
-编辑 `ai_analyzer.py` 中的 `prompt_template`，自定义评估维度。
+- 过滤入口：`filtering/job_filter.py`
+- Agent 节点与图：`agent/`
+- Prompt：`agent/prompts/`
 
 ### 修改邮件模板
 
-编辑 `email_sender.py` 中的 `create_email_body()` 和 `create_job_html()` 方法。
+编辑 `notification/email_sender.py` 中的 `create_email_body()` 与 `create_job_html()`。
 
 ### 添加更多职位源
 
-在 `scraper.py` 的 `self.sites` 中添加支持的站点（需 python-jobspy 支持）。
+在 `scraper.py` 的 `self.sites` 中添加站点（需 `python-jobspy` 支持）。
 
 ---
 
@@ -379,9 +295,10 @@ DATABASE_URL=postgresql://user:pass@host.supabase.co:5432/postgres
 
 ## 🙏 致谢
 
-- [python-jobspy](https://github.com/Bunsly/JobSpy) - 职位抓取库
-- [Google Gemini](https://ai.google.dev/) - AI 分析引擎
-- [Resend](https://resend.com/) - 邮件推送服务
+- [python-jobspy](https://github.com/Bunsly/JobSpy)
+- [OpenRouter](https://openrouter.ai/)
+- [LangGraph](https://github.com/langchain-ai/langgraph)
+- [Loguru](https://github.com/Delgan/loguru)
 
 ---
 
