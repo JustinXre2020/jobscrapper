@@ -5,102 +5,36 @@ Supports multi-recipient with per-recipient search terms and sponsorship filteri
 """
 import os
 import sys
-import logging
 from typing import List, Dict
 from datetime import datetime
-from pathlib import Path
 from dotenv import load_dotenv
 import pandas as pd
+from loguru import logger
+from infra.logging_config import configure_logging
 
 # Import custom modules
 from scraper import JobScraper
 from storage.database import JobDatabase
 from notification.email_sender import EmailSender
 from storage.data_manager import DataManager
-if os.getenv("USE_AGENT_WORKFLOW", "true").lower() == "true":
-    from filtering.job_filter import OpenRouterLLMFilter
-else:
-    from filtering.llm_filter_legacy import OpenRouterLLMFilter
+
+from filtering.job_filter import OpenRouterLLMFilter
+
 from config import parse_recipients, get_all_search_terms, mask_email, get_results_wanted, get_scrape_queries, DEFAULT_RESULTS_WANTED
 
 load_dotenv()
 
 
 def setup_logging() -> str:
-    """
-    Configure logging to output to both console and file.
-
-    Returns:
-        Path to the log file
-    """
-    # Create logs directory
-    logs_dir = Path("logs")
-    logs_dir.mkdir(exist_ok=True)
-
-    # Create log file with timestamp
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    log_file = logs_dir / f"job_hunter_{timestamp}.log"
-
-    # Configure root logger
-    root_logger = logging.getLogger()
-    root_logger.setLevel(logging.DEBUG)
-
-    # Clear existing handlers
-    root_logger.handlers.clear()
-
-    # File handler - captures everything including DEBUG
-    file_handler = logging.FileHandler(log_file, encoding='utf-8')
-    file_handler.setLevel(logging.DEBUG)
-    file_formatter = logging.Formatter(
-        '%(asctime)s | %(levelname)-8s | %(name)s | %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
+    """Configure logging to output to both console and file."""
+    return configure_logging(
+        log_file_prefix="job_hunter",
+        third_party_levels={
+            "llm_filter": "DEBUG",
+            "aiohttp": "WARNING",
+            "urllib3": "WARNING",
+        },
     )
-    file_handler.setFormatter(file_formatter)
-    root_logger.addHandler(file_handler)
-
-    # Console handler - INFO and above
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(logging.INFO)
-    console_formatter = logging.Formatter('%(message)s')
-    console_handler.setFormatter(console_formatter)
-    root_logger.addHandler(console_handler)
-
-    # Set levels for specific loggers
-    logging.getLogger('llm_filter').setLevel(logging.DEBUG)
-    logging.getLogger('aiohttp').setLevel(logging.WARNING)
-    logging.getLogger('urllib3').setLevel(logging.WARNING)
-
-    return str(log_file)
-
-
-# Module-level logger (initialized after setup_logging is called)
-logger = logging.getLogger(__name__)
-
-# Entry-level job title keywords
-ENTRY_LEVEL_KEYWORDS = [
-    'entry level', 'entry-level', 'junior', 'associate', 'new grad',
-    'new graduate', 'early career', 'graduate', 'i ', ' i,', ' 1 ', ' 1,',
-    'level 1', 'level i', 'trainee', 'intern'
-]
-
-# Senior-level keywords to exclude
-SENIOR_KEYWORDS = [
-    'senior', 'sr.', 'sr ', 'lead', 'principal', 'staff', 'manager',
-    'director', 'vp', 'vice president', 'head of', 'chief', 'architect',
-    'ii', 'iii', 'iv', ' 2 ', ' 3 ', ' 4 ', 'level 2', 'level 3'
-]
-
-# PhD requirement keywords to exclude
-PHD_KEYWORDS = [
-    'phd', 'ph.d', 'doctorate', 'doctoral', 'postdoc', 'post-doc',
-    'research scientist', 'research engineer'
-]
-
-# H1B/Visa sponsorship keywords
-VISA_KEYWORDS = [
-    'h1b', 'h-1b', 'visa sponsor', 'sponsorship', 'work authorization',
-    'immigration', 'sponsor', 'employment authorization'
-]
 
 
 class JobHunterSentinel:
@@ -144,7 +78,7 @@ class JobHunterSentinel:
             logger.info(f"   LLM Workers: {self.llm_workers if self.llm_workers > 0 else 'auto'}")
 
         except Exception as e:
-            logger.error(f"❌ Initialization failed: {e}", exc_info=True)
+            logger.exception(f"❌ Initialization failed: {e}")
             sys.exit(1)
 
     def _get_list_config(self, key: str, default: List[str]) -> List[str]:
@@ -153,107 +87,6 @@ class JobHunterSentinel:
         if not value:
             return default
         return [item.strip() for item in value.split(",") if item.strip()]
-
-    def _is_entry_level(self, title: str) -> bool:
-        """Check if job title indicates entry-level position"""
-        if not title:
-            return False
-        title_lower = title.lower()
-
-        # Exclude if senior keywords found
-        for keyword in SENIOR_KEYWORDS:
-            if keyword in title_lower:
-                return False
-
-        # Include if entry-level keywords found
-        for keyword in ENTRY_LEVEL_KEYWORDS:
-            if keyword in title_lower:
-                return True
-
-        # Default: include jobs without explicit level (could be entry-level)
-        return True
-
-    def _has_visa_sponsorship(self, description: str) -> bool:
-        """Check if job description mentions visa sponsorship"""
-        if not description or (isinstance(description, float) and pd.isna(description)):
-            return True  # Include jobs without description (can't verify)
-
-        desc_lower = str(description).lower()
-
-        # Check for visa sponsorship keywords
-        for keyword in VISA_KEYWORDS:
-            if keyword in desc_lower:
-                return True
-
-        # Check for negative visa statements (exclude these)
-        negative_patterns = [
-            'no sponsor', 'not sponsor', 'cannot sponsor', 'will not sponsor',
-            'unable to sponsor', 'without sponsor', 'no visa', 'not able to sponsor'
-        ]
-        for pattern in negative_patterns:
-            if pattern in desc_lower:
-                return False
-
-        # Default: include jobs that don't explicitly reject sponsorship
-        return True
-
-    def _requires_phd(self, title: str, description: str) -> bool:
-        """Check if job requires PhD"""
-        title_lower = title.lower() if title else ''
-        desc_lower = str(description).lower() if description and not (isinstance(description, float) and pd.isna(description)) else ''
-
-        # Check for PhD keywords in title (strong indicator)
-        for keyword in PHD_KEYWORDS:
-            if keyword in title_lower:
-                return True
-
-        # Check for PhD requirement phrases in description
-        phd_required_patterns = [
-            'phd required', 'ph.d required', 'ph.d. required',
-            'doctorate required', 'doctoral degree required',
-            'must have phd', 'must have ph.d', 'requires phd', 'requires ph.d',
-            'phd in', 'ph.d in', 'ph.d. in'
-        ]
-        for pattern in phd_required_patterns:
-            if pattern in desc_lower:
-                return True
-
-        return False
-
-    def filter_jobs(self, jobs_list: List[Dict]) -> List[Dict]:
-        """Filter jobs for entry-level positions with potential visa sponsorship"""
-        filtered = []
-        excluded_senior = 0
-        excluded_no_visa = 0
-        excluded_phd = 0
-
-        for job in jobs_list:
-            title = job.get('title', '')
-            description = job.get('description', '')
-
-            # Check entry-level
-            if not self._is_entry_level(title):
-                excluded_senior += 1
-                continue
-
-            # Check PhD requirement
-            if self._requires_phd(title, description):
-                excluded_phd += 1
-                continue
-
-            # Check visa sponsorship
-            if not self._has_visa_sponsorship(description):
-                excluded_no_visa += 1
-                continue
-
-            filtered.append(job)
-
-        logger.info(f"   Excluded {excluded_senior} senior-level positions")
-        logger.info(f"   Excluded {excluded_phd} PhD-required positions")
-        logger.info(f"   Excluded {excluded_no_visa} jobs with no visa sponsorship")
-        logger.info(f"   ✅ {len(filtered)} jobs passed filters")
-
-        return filtered
 
     def run(self):
         """Execute the full job hunting workflow with sequential keyword processing"""
@@ -325,14 +158,10 @@ class JobHunterSentinel:
                 logger.info(f"\n🤖 STEP 3: LLM filtering for '{search_term}'...")
                 logger.info("-" * 60)
 
-                if self.llm_filter:
-                    # Use parallel filtering (auto-detects workers based on RAM if llm_workers=0)
-                    filtered_jobs = self.llm_filter.filter_jobs_parallel(
-                        new_jobs, [search_term], num_workers=self.llm_workers
-                    )
-                else:
-                    logger.warning("   ⚠️ LLM filter not available, using rule-based fallback...")
-                    filtered_jobs = self.filter_jobs(new_jobs)
+                # Use parallel filtering (auto-detects workers based on RAM if llm_workers=0)
+                filtered_jobs = self.llm_filter.filter_jobs_parallel(
+                    new_jobs, [search_term], num_workers=self.llm_workers
+                )
 
                 filtered_count = len(filtered_jobs)
                 total_filtered += filtered_count
@@ -407,7 +236,7 @@ class JobHunterSentinel:
             logger.warning("\n\n⚠️ Process interrupted by user")
             sys.exit(0)
         except Exception as e:
-            logger.error(f"\n\n❌ Fatal error: {e}", exc_info=True)
+            logger.exception(f"\n\n❌ Fatal error: {e}")
             sys.exit(1)
 
     def _log_summary(
@@ -447,14 +276,14 @@ def main():
     """Main entry point"""
     # Setup logging first
     log_file = setup_logging()
-    main_logger = logging.getLogger(__name__)
+    main_logger = logger
     main_logger.info(f"📝 Logging to: {log_file}")
 
     try:
         sentinel = JobHunterSentinel()
         sentinel.run()
     except Exception as e:
-        main_logger.error(f"❌ Application failed to start: {e}", exc_info=True)
+        main_logger.exception(f"❌ Application failed to start: {e}")
         sys.exit(1)
 
 
