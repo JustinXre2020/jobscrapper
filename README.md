@@ -10,7 +10,7 @@
 - 🗑️ **增强去重**: 先按 `job_url` 去重，再按 `title + company` 合并重复岗位并合并地点
 - 💾 **本地数据存储**: 抓取数据自动保存为 JSON/CSV，已发送记录保存在数据库
 - 🪵 **统一日志**: 全项目使用 Loguru，文件与控制台日志格式统一
-- ⏰ **自动调度**: 支持本地执行与 GitHub Actions 定时运行（每日两次）
+- ⏰ **自动调度**: 支持本地执行与 GitHub Actions 定时运行（每日 1 次，1:00 PM EST）
 - 🛡️ **异常处理**: 429 速率限制自动退避，空结果会发送友好通知
 
 ---
@@ -155,11 +155,6 @@ jobscrapper/
 | `RESULTS_WANTED` | 每个查询返回数 | `20` |
 | `HOURS_OLD` | 职位时间窗口（小时） | `24` |
 
---------|------|------|
-| `SEARCH_TERMS` | 职位关键词（逗号分隔） | `software engineer,ml engineer` |
-| `LOCATIONS` | 搜索地点（逗号分隔） | `San Francisco CA,NYC` |
-| `RESULTS_WANTED` | 每个搜索返回结果数 | `20` |
-| `HOURS_OLD` | 职位时间窗口（小时） | `24` |
 
 ---
 
@@ -203,6 +198,22 @@ python -m venv .venv
 source .venv/bin/activate  # Linux/Mac
 pip install -r requirements.txt
 ```
+
+---
+
+## 🤖 GitHub Actions 自动化
+
+当前 workflow 文件：`.github/workflows/job_hunter.yml`
+
+- `schedule`: `0 18 * * *`（UTC 18:00 = 1:00 PM EST）
+- `workflow_dispatch`: 支持手动触发
+
+建议在仓库 Secrets 中配置：
+
+- `OPENROUTER_API_KEY`
+- `GMAIL_EMAIL`
+- `GMAIL_APP_PASSWORD`
+- `RECIPIENTS`
 
 ---
 
