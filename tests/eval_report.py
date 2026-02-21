@@ -11,7 +11,7 @@ Usage:
 
 import asyncio
 import json
-import logging
+from loguru import logger
 import os
 import sys
 from copy import deepcopy
@@ -21,19 +21,16 @@ from typing import Any, Dict, List
 # Ensure project root is importable
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from sklearn.metrics import (  # noqa: E402
+from sklearn.metrics import (
     accuracy_score,
     f1_score,
     precision_score,
     recall_score,
 )
 
-from agent.feedback.store import create_feedback_store  # noqa: E402
-from agent.graph import build_graph, run_single_job  # noqa: E402
-from infra.llm_client import LLMClient  # noqa: E402
+from agent.graph import build_graph, run_single_job
+from infra.llm_client import LLMClient
 
-logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
-logger = logging.getLogger(__name__)
 
 EVAL_FIELDS = [
     "keyword_match",
@@ -155,7 +152,7 @@ async def _process_single_job(
         return evaluation
 
     except Exception as e:
-        logger.error(f"Unexpected error processing {job_title} @ {company}: {e}", exc_info=True)
+        logger.error(f"Unexpected error processing {job_title} @ {company}: {e}")
         return {
             "keyword_match": True,
             "visa_sponsorship": True,
