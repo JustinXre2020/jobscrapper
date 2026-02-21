@@ -8,12 +8,11 @@ import sys
 from typing import List, Dict
 from datetime import datetime
 from dotenv import load_dotenv
-import pandas as pd
 from loguru import logger
 from infra.logging_config import configure_logging
 
 # Import custom modules
-from scraper import JobScraper
+from infra.scraper import JobScraper
 from storage.database import JobDatabase
 from notification.email_sender import EmailSender
 from storage.data_manager import DataManager
