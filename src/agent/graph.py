@@ -2,6 +2,9 @@
 
 Current topology:
     [START] -> [Summarizer] -> [AnalyzerEnsemble x3] -> [END]
+
+Each node is backed by its own ``BaseLLMClient`` instance so that
+Summarizer and Analyzer can use different models/providers.
 """
 
 import asyncio
@@ -10,10 +13,10 @@ from typing import Any, Dict, List, Optional
 
 from langgraph.graph import END, StateGraph
 
-from agent.nodes.analyzer import _call_llm_analyzer, _deterministic_eval
-from agent.nodes.summarizer import summarizer_node
+from agent.nodes.analyzer import AnalyzerNode, _deterministic_eval
+from agent.nodes.summarizer import SummarizerNode
 from agent.state import AgentState, JobState
-from infra.llm_client import LLMClient
+from infra.llm_client import BaseLLMClient
 
 
 BOOLEAN_FIELDS = [
@@ -26,9 +29,9 @@ BOOLEAN_FIELDS = [
 ANALYZER_TEMPERATURES = [0.0, 0.0, 0.0]
 
 
-def _wrap_summarizer(llm_client: LLMClient):
+def _wrap_summarizer(summarizer_node: SummarizerNode):
     async def _node(state: AgentState) -> Dict[str, Any]:
-        return await summarizer_node(state, llm_client)
+        return await summarizer_node(state)
 
     return _node
 
@@ -55,7 +58,7 @@ def _pick_closest_reason(results: List[Dict[str, Any]], evaluation: Dict[str, An
     return best.get("reason", "")
 
 
-def _wrap_analyzer_ensemble(llm_client: LLMClient):
+def _wrap_analyzer_ensemble(analyzer_node: AnalyzerNode):
     async def _node(state: AgentState) -> Dict[str, Any]:
         summary = state.get("summary")
         if not summary:
@@ -71,11 +74,11 @@ def _wrap_analyzer_ensemble(llm_client: LLMClient):
         deterministic = _deterministic_eval(summary, search_terms)
 
         async def _run_once(temperature: float) -> Dict[str, Any]:
-            return await _call_llm_analyzer(
+            # Each ensemble call uses the same AnalyzerNode client but a different temperature
+            return await analyzer_node._call_llm_analyzer(
                 summary,
                 search_terms,
                 accumulated_feedback,
-                llm_client,
                 job,
                 temperature=temperature,
             )
@@ -127,11 +130,24 @@ def route_after_summarize(state: JobState) -> str:
     return "analyzer_ensemble"
 
 
-def build_job_graph(llm_client: LLMClient):
-    """Build the per-job graph: Summarizer -> AnalyzerEnsemble -> END."""
+def build_job_graph(
+    summarizer_client: Optional[BaseLLMClient] = None,
+    analyzer_client: Optional[BaseLLMClient] = None,
+):
+    """Build the per-job graph: Summarizer -> AnalyzerEnsemble -> END.
+
+    Args:
+        summarizer_client: LLM client for the Summarizer node. When None,
+            SummarizerNode reads SUMMARIZER_PROVIDER / SUMMARIZER_MODEL env vars.
+        analyzer_client: LLM client for the Analyzer node. When None,
+            AnalyzerNode reads ANALYZER_PROVIDER / ANALYZER_MODEL env vars.
+    """
+    summarizer = SummarizerNode(summarizer_client)
+    analyzer = AnalyzerNode(analyzer_client)
+
     graph = StateGraph(JobState)
-    graph.add_node("summarizer", _wrap_summarizer(llm_client))
-    graph.add_node("analyzer_ensemble", _wrap_analyzer_ensemble(llm_client))
+    graph.add_node("summarizer", _wrap_summarizer(summarizer))
+    graph.add_node("analyzer_ensemble", _wrap_analyzer_ensemble(analyzer))
 
     graph.set_entry_point("summarizer")
     graph.add_conditional_edges("summarizer", route_after_summarize)
@@ -139,10 +155,19 @@ def build_job_graph(llm_client: LLMClient):
     return graph.compile()
 
 
-def build_graph(llm_client: LLMClient):
-    """Build the single-job graph."""
+def build_graph(
+    summarizer_client: Optional[BaseLLMClient] = None,
+    analyzer_client: Optional[BaseLLMClient] = None,
+):
+    """Build the single-job graph.
+
+    Args:
+        summarizer_client: LLM client for Summarizer (or None to use env defaults).
+        analyzer_client: LLM client for Analyzer (or None to use env defaults).
+    """
     logger.info("Using single-job workflow (Summarizer -> 3x Analyzer ensemble)")
-    return build_job_graph(llm_client)
+    return build_job_graph(summarizer_client, analyzer_client)
+
 
 async def run_single_job(
     compiled_graph: Any,

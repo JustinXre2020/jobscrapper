@@ -1,15 +1,21 @@
-"""Analyzer node - evaluates job against criteria using structured summary data."""
+"""Analyzer node — evaluates a job against filter criteria using structured summary data.
+
+Public interface:
+    AnalyzerNode(BaseNode)  — class-based, injectable LLM client
+    analyzer_node(state, llm_client)  — module-level shim for backwards compat
+"""
 
 import json
+import os
 from loguru import logger
 from typing import Any, Dict, List, Optional
 
-from infra.llm_client import LLMClient, LLMClientError
+from infra.llm_client import BaseLLMClient, LLMClientError, create_llm_client
 from infra.models import JobEvaluation
 from infra.json_repair import repair_json
 from agent.state import AgentState
+from agent.nodes.base import BaseNode
 from agent.prompts.analyzer_prompt import ANALYZER_SYSTEM, build_analyzer_prompt
-
 
 
 def _deterministic_eval(
@@ -53,7 +59,7 @@ def _deterministic_eval(
     elif seniority in ("entry", "intern") and (years is None or years <= 1):
         result["entry_level"] = True
     else:
-        result["entry_level"] = None  # ambiguous -- let LLM decide
+        result["entry_level"] = None  # ambiguous — let LLM decide
 
     # keyword_match: requires semantic judgment, leave to LLM
     result["keyword_match"] = None
@@ -62,7 +68,7 @@ def _deterministic_eval(
 
 
 def _parse_text_fallback(response_text: str) -> Dict[str, Any]:
-    """Parse LLM text response into evaluation dict (fallback for structured mode failure).
+    """Parse LLM text response into evaluation dict (fallback for structured-mode failure).
 
     Uses JSON repair to handle invalid escape sequences from models like Liquid AI.
     """
@@ -80,7 +86,7 @@ def _parse_text_fallback(response_text: str) -> Dict[str, Any]:
     except (json.JSONDecodeError, ValueError):
         pass
 
-    # Fallback: default to permissive
+    # Fallback: default to permissive so the job is not silently filtered out
     return {
         "keyword_match": True,
         "visa_sponsorship": True,
@@ -91,124 +97,160 @@ def _parse_text_fallback(response_text: str) -> Dict[str, Any]:
     }
 
 
+def _build_analyzer_client() -> BaseLLMClient:
+    """Construct the LLM client for Analyzer from env vars.
+
+    Env vars (all optional):
+        ANALYZER_PROVIDER  -- 'openrouter' or 'local' (default: 'openrouter')
+        ANALYZER_MODEL     -- model name (default: 'liquid/lfm-2.2-6b')
+    """
+    provider = os.getenv("ANALYZER_PROVIDER", "openrouter")
+    model = os.getenv("ANALYZER_MODEL", "liquid/lfm-2.2-6b")
+    return create_llm_client(provider=provider, model=model)
+
+
+class AnalyzerNode(BaseNode):
+    """LangGraph node that evaluates a job against user-defined criteria.
+
+    Uses liquid/lfm-2.2-6b via OpenRouter by default. Inject a different
+    ``BaseLLMClient`` for testing or to switch providers at runtime.
+    """
+
+    def __init__(self, llm_client: Optional[BaseLLMClient] = None) -> None:
+        """
+        Args:
+            llm_client: LLM provider to use. When None, reads ANALYZER_PROVIDER /
+                        ANALYZER_MODEL env vars to build a default client.
+        """
+        super().__init__(llm_client or _build_analyzer_client())
+
+    async def _call_llm_analyzer(
+        self,
+        summary: Dict[str, Any],
+        search_terms: List[str],
+        accumulated_feedback: List[str],
+        job: Dict[str, Any],
+        temperature: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Call the analyzer LLM once and return the evaluation dict."""
+        job_context = self._job_context(job)
+        prompt = build_analyzer_prompt(
+            summary,
+            search_terms,
+            accumulated_feedback=accumulated_feedback,
+            job=job,
+        )
+        messages = [
+            {"role": "system", "content": ANALYZER_SYSTEM},
+            {"role": "user", "content": prompt},
+        ]
+
+        try:
+            evaluation_model = await self.llm_client.complete_structured(
+                messages, JobEvaluation, job_context=job_context, temperature=temperature
+            )
+            return evaluation_model.model_dump()
+        except LLMClientError:
+            logger.warning(f"Structured output failed [{job_context}], falling back to text")
+            response_text = await self.llm_client.complete_text(
+                messages, job_context=job_context, temperature=temperature
+            )
+            return _parse_text_fallback(response_text)
+
+    async def __call__(self, state: AgentState) -> Dict[str, Any]:
+        """Evaluate job against filter criteria using the structured summary.
+
+        Args:
+            state: Current agent state with 'job', 'summary', 'search_terms'.
+
+        Returns:
+            State updates: {'evaluation': dict} on success or {'error': str}.
+        """
+        summary = state.get("summary")
+        search_terms = state["search_terms"]
+        accumulated_feedback = state.get("accumulated_feedback", [])
+        job = state["job"]
+        job_context = self._job_context(job)
+        job_title = job.get("title", "Unknown")
+        company = job.get("company", "Unknown")
+
+        if not summary:
+            return {"error": "No summary available for analysis"}
+
+        try:
+            deterministic = _deterministic_eval(summary, search_terms)
+
+            result = await self._call_llm_analyzer(
+                summary, search_terms, accumulated_feedback, job
+            )
+
+            # Apply deterministic overrides on top of LLM result
+            for field, value in deterministic.items():
+                if value is not None and result.get(field) != value:
+                    logger.debug(
+                        f"Deterministic override [{job_context}]: "
+                        f"{field} {result.get(field)} -> {value}"
+                    )
+                    result[field] = value
+
+            result["job_title"] = job_title
+            result["company"] = company
+
+            logger.info(
+                f"EVALUATED [{job_context}]: "
+                f"keyword={result.get('keyword_match')}, "
+                f"visa={result.get('visa_sponsorship')}, "
+                f"entry={result.get('entry_level')}, "
+                f"phd={result.get('requires_phd')}, "
+                f"intern={result.get('is_internship')}"
+            )
+            return {"evaluation": result}
+
+        except LLMClientError as e:
+            logger.warning(f"Analyzer LLM error [{job_context}]: {e}")
+            if "429" in str(e) or "Rate limited" in str(e):
+                return {
+                    "evaluation": {
+                        "keyword_match": False,
+                        "visa_sponsorship": False,
+                        "entry_level": False,
+                        "requires_phd": True,
+                        "is_internship": True,
+                        "reason": "Rate limited (429) - filtered out",
+                        "error": True,
+                        "rate_limited": True,
+                        "job_title": job_title,
+                        "company": company,
+                    },
+                    "error": "Rate limited",
+                }
+            return {"error": str(e)}
+        except Exception as e:
+            logger.error(f"Analyzer unexpected error [{job_context}]: {e}")
+            return {"error": str(e)}
+
+
+# ---------------------------------------------------------------------------
+# Backwards-compat shim — existing callers that pass `llm_client` explicitly
+# ---------------------------------------------------------------------------
+
 async def _call_llm_analyzer(
     summary: Dict[str, Any],
     search_terms: List[str],
     accumulated_feedback: List[str],
-    llm_client: LLMClient,
+    llm_client: BaseLLMClient,
     job: Dict[str, Any],
     temperature: Optional[float] = None,
 ) -> Dict[str, Any]:
-    """Reusable async helper that calls the LLM analyzer once.
-
-    Args:
-        summary: Structured JobSummaryModel data (dict).
-        search_terms: Target roles to match.
-        accumulated_feedback: Historic corrections.
-        llm_client: Provider-agnostic LLM client.
-        job: Raw job dict (for logging context).
-        temperature: Optional temperature override for this call.
-
-    Returns:
-        Evaluation dict with boolean fields and reason.
-
-    Raises:
-        LLMClientError: On API failures.
-    """
-    job_title = job.get("title", "Unknown")
-    company = job.get("company", "Unknown")
-    job_context = f"{job_title} @ {company}"
-
-    prompt = build_analyzer_prompt(
-        summary,
-        search_terms,
-        accumulated_feedback=accumulated_feedback,
-        job=job,
+    """Module-level wrapper kept for backwards compatibility."""
+    return await AnalyzerNode(llm_client)._call_llm_analyzer(
+        summary, search_terms, accumulated_feedback, job, temperature
     )
-    messages = [
-        {"role": "system", "content": ANALYZER_SYSTEM},
-        {"role": "user", "content": prompt},
-    ]
-
-    try:
-        evaluation_model = await llm_client.complete_structured(
-            messages, JobEvaluation, job_context=job_context, temperature=temperature
-        )
-        return evaluation_model.model_dump()
-    except LLMClientError:
-        logger.warning(f"Structured output failed [{job_context}], falling back to text")
-        response_text = await llm_client.complete_text(
-            messages, job_context=job_context, temperature=temperature
-        )
-        return _parse_text_fallback(response_text)
 
 
-async def analyzer_node(state: AgentState, llm_client: LLMClient) -> Dict[str, Any]:
-    """Node 2: Evaluate job against filter criteria using structured summary."""
-    summary = state.get("summary")
-    search_terms = state["search_terms"]
-    accumulated_feedback = state.get("accumulated_feedback", [])
-    job = state["job"]
-    job_title = job.get("title", "Unknown")
-    company = job.get("company", "Unknown")
-    job_context = f"{job_title} @ {company}"
+async def analyzer_node(state: AgentState, llm_client: BaseLLMClient) -> Dict[str, Any]:
+    """Module-level wrapper kept for backwards compatibility.
 
-    if not summary:
-        return {"error": "No summary available for analysis"}
-
-    try:
-        deterministic = _deterministic_eval(summary, search_terms)
-
-        result = await _call_llm_analyzer(
-            summary,
-            search_terms,
-            accumulated_feedback,
-            llm_client,
-            job,
-        )
-
-        # Override LLM results with deterministic values where available
-        for field, value in deterministic.items():
-            if value is not None and result.get(field) != value:
-                logger.debug(
-                    f"Deterministic override [{job_context}]: "
-                    f"{field} {result.get(field)} -> {value}"
-                )
-                result[field] = value
-
-        result["job_title"] = job_title
-        result["company"] = company
-
-        logger.info(
-            f"EVALUATED [{job_context}]: "
-            f"keyword={result.get('keyword_match')}, "
-            f"visa={result.get('visa_sponsorship')}, "
-            f"entry={result.get('entry_level')}, "
-            f"phd={result.get('requires_phd')}, "
-            f"intern={result.get('is_internship')}"
-        )
-
-        return {"evaluation": result}
-
-    except LLMClientError as e:
-        logger.warning(f"Analyzer LLM error [{job_context}]: {e}")
-        if "429" in str(e) or "Rate limited" in str(e):
-            return {
-                "evaluation": {
-                    "keyword_match": False,
-                    "visa_sponsorship": False,
-                    "entry_level": False,
-                    "requires_phd": True,
-                    "is_internship": True,
-                    "reason": "Rate limited (429) - filtered out",
-                    "error": True,
-                    "rate_limited": True,
-                    "job_title": job_title,
-                    "company": company,
-                },
-                "error": "Rate limited",
-            }
-        return {"error": str(e)}
-    except Exception as e:
-        logger.error(f"Analyzer unexpected error [{job_context}]: {e}")
-        return {"error": str(e)}
+    Prefer instantiating ``AnalyzerNode`` directly.
+    """
+    return await AnalyzerNode(llm_client)(state)

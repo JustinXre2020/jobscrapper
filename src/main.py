@@ -263,11 +263,6 @@ class JobHunterSentinel:
         logger.info(f"🔍 Jobs Filtered: {filtered}")
         logger.info(f"📧 Email Results: {successful_emails}/{total_recipients} successful")
 
-        if email_results:
-            for email, success in email_results.items():
-                status = "✅" if success else "❌"
-                logger.info(f"   {status} {email}")
-
         overall_status = 'SUCCESS' if filtered > 0 and successful_emails > 0 else 'NO NEW JOBS'
         logger.info(f"✅ Status: {overall_status}")
         logger.info(f"{'='*60}\n")

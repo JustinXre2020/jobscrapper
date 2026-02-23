@@ -2,6 +2,10 @@
 
 Current workflow is strictly per-job:
     Summarizer -> (3 parallel Analyzer calls) -> majority-voted evaluation
+
+Each node uses its own LLM client configured via env vars:
+    SUMMARIZER_PROVIDER / SUMMARIZER_MODEL  -- for the Summarizer node
+    ANALYZER_PROVIDER   / ANALYZER_MODEL    -- for the Analyzer ensemble
 """
 
 import asyncio
@@ -11,23 +15,51 @@ from typing import Dict, List, Optional
 
 from agent.feedback.store import create_feedback_store
 from agent.graph import build_graph, run_single_job
-from infra.llm_client import LLMClient
+from infra.llm_client import BaseLLMClient, create_llm_client
 
 
 AGENT_CONCURRENCY = int(os.getenv("AGENT_CONCURRENCY", "50"))
 
+# --- Per-node defaults ---
+_SUMMARIZER_PROVIDER = os.getenv("SUMMARIZER_PROVIDER", "openrouter")
+_SUMMARIZER_MODEL = os.getenv("SUMMARIZER_MODEL", "xiaomi/mimo-v2-flash")
+
+_ANALYZER_PROVIDER = os.getenv("ANALYZER_PROVIDER", "openrouter")
+_ANALYZER_MODEL = os.getenv("ANALYZER_MODEL", "liquid/lfm-2.2-6b")
+
 
 class OpenRouterLLMFilter:
-    """Filter jobs using the per-job LangGraph workflow."""
+    """Filter jobs using the per-job LangGraph workflow.
+
+    The Summarizer and Analyzer nodes each receive their own ``BaseLLMClient``,
+    allowing them to target different models or even different inference backends.
+    """
 
     def __init__(
         self,
         model: Optional[str] = None,
         concurrency: int = AGENT_CONCURRENCY,
-        rate_limit_delay: float = 60,
+        rate_limit_delay: float = 60
     ) -> None:
-        self.llm_client = LLMClient(model=model)
-        self.model = self.llm_client.model
+        """
+        Args:
+            model: Legacy single-model override. When provided, sets the Analyzer
+                   model to this value (for backwards compatibility). Per-node env
+                   vars take precedence over this argument.
+            concurrency: Max number of jobs processed in parallel.
+            rate_limit_delay: Seconds to wait between concurrency-sized batches.
+            summarizer_client: Explicit Summarizer client (overrides env defaults).
+            analyzer_client: Explicit Analyzer client (overrides env defaults).
+        """
+        # Build per-node clients from env vars unless callers inject them directly
+        self.summarizer_client = create_llm_client(
+            provider=_SUMMARIZER_PROVIDER, model=_SUMMARIZER_MODEL
+        )
+        self.analyzer_client = create_llm_client(
+            provider=_ANALYZER_PROVIDER, model=model
+        )
+
+        self.model = self.analyzer_client.model  # kept for compat / logging
         self.concurrency = concurrency
         self.rate_limit_delay = rate_limit_delay
 
@@ -42,11 +74,12 @@ class OpenRouterLLMFilter:
                 logger.warning("sentence-transformers not installed, using JSONL feedback")
 
         self.feedback_store = create_feedback_store(embedding_client)
-        self.compiled_graph = build_graph(self.llm_client)
+        self.compiled_graph = build_graph(self.summarizer_client, self.analyzer_client)
         self.is_free_model = ":free" in self.model.lower()
 
         logger.info("Agent workflow LLM Filter initialized (single-job ensemble mode)")
-        logger.info(f"   Model: {self.model}")
+        logger.info(f"   Summarizer: {self.summarizer_client.model} ({_SUMMARIZER_PROVIDER})")
+        logger.info(f"   Analyzer:   {self.model} ({_ANALYZER_PROVIDER})")
         logger.info(f"   Batch size: {self.concurrency}")
         if self.is_free_model:
             logger.warning("   Free model detected - rate limited (~19 req/min)")
