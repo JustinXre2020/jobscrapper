@@ -1,118 +1,88 @@
 """
-Database module for job deduplication and persistence
-Supports both SQLite and text file storage
+Database module for job deduplication and persistence.
+Uses Redis when REDIS_PORT is configured; falls back to a text file otherwise.
 """
 import os
 import json
 from loguru import logger
 from pathlib import Path
-from typing import Set, Optional, Dict, List
-from datetime import datetime
-from sqlalchemy import create_engine, Column, String, Integer, DateTime, Text
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, Session
+from typing import Optional, Dict, List
+from datetime import datetime, timezone
 from dotenv import load_dotenv
 
 load_dotenv()
 
+_REDIS_TTL = 259200  # 3 days in seconds (jobdedup: seen-recently cache)
+_DEDUP_PREFIX = "jobdedup:"   # ephemeral: seen in last 3 days
+_SENT_PREFIX = "jobsent:"     # permanent: successfully emailed
 
 # Ensure data directory exists
 DATA_DIR = Path(__file__).parent / "data"
 DATA_DIR.mkdir(exist_ok=True)
 
-Base = declarative_base()
-
-
-class SentJob(Base):
-    """SQLAlchemy model for sent jobs tracking"""
-    __tablename__ = 'sent_jobs'
-    
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    job_url = Column(String, unique=True, nullable=False, index=True)
-    title = Column(String)
-    company = Column(String)
-    location = Column(String)
-    score = Column(Integer)
-    sent_at = Column(DateTime, default=datetime.utcnow)
-    job_metadata = Column(Text)  # JSON string for additional data
-    
-    def __repr__(self):
-        return f"<SentJob(url='{self.job_url}', title='{self.title}', company='{self.company}')>"
-
 
 class JobDatabase:
-    """Database handler with fallback to text file"""
-    
-    def __init__(self, database_url: Optional[str] = None):
-        """
-        Initialize database connection
+    """Job dedup/persistence handler.
 
-        Args:
-            database_url: SQLAlchemy connection string or path
-        """
-        # Default to data/ directory for SQLite
-        default_db = f"sqlite:///{DATA_DIR / 'jobs.db'}"
-        self.database_url = database_url or os.getenv("DATABASE_URL", default_db)
-        self.use_sqlite = self.database_url.startswith("sqlite")
+    When ``REDIS_PORT`` is set, all operations go through Redis:
+      - ``jobdedup:<url>``  (string, 3-day TTL)
+      - ``jobsent:<url>``   (hash, 3-day TTL)
+
+    When Redis is not configured, falls back to ``sent_jobs.txt``.
+    """
+
+    def __init__(self, database_url: Optional[str] = None):  # database_url kept for API compat
         self.fallback_file = str(DATA_DIR / "sent_jobs.txt")
-        
-        try:
-            # Try to initialize SQLAlchemy
-            self.engine = create_engine(self.database_url)
-            Base.metadata.create_all(self.engine)
-            self.SessionLocal = sessionmaker(bind=self.engine)
-            self.db_available = True
-            logger.info(f"✅ Database initialized: {self.database_url}")
+        self.redis_client = self._init_redis()
 
-        except Exception as e:
-            logger.warning(f"⚠️ Database initialization failed: {e}")
-            logger.info(f"📝 Falling back to text file: {self.fallback_file}")
-            self.db_available = False
-            
-            # Ensure fallback file exists
+        if self.redis_client is None:
             if not os.path.exists(self.fallback_file):
-                with open(self.fallback_file, 'w') as f:
+                with open(self.fallback_file, "w") as f:
                     f.write("")
-    
-    def _get_session(self) -> Optional[Session]:
-        """Get database session if available"""
-        if self.db_available:
-            return self.SessionLocal()
-        return None
-    
-    def is_job_sent(self, job_url: str) -> bool:
-        """
-        Check if a job has already been sent
-        
-        Args:
-            job_url: Unique job URL identifier
-            
-        Returns:
-            True if job was already sent, False otherwise
-        """
-        if self.db_available:
-            session = self._get_session()
-            try:
-                exists = session.query(SentJob).filter_by(job_url=job_url).first() is not None
-                return exists
-            except Exception as e:
-                logger.error(f"❌ Database query error: {e}")
-                return self._is_job_sent_fallback(job_url)
-            finally:
-                session.close()
-        else:
-            return self._is_job_sent_fallback(job_url)
-    
-    def _is_job_sent_fallback(self, job_url: str) -> bool:
-        """Check if job was sent using text file"""
+            logger.info("📝 Redis not configured — using text-file dedup fallback")
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _init_redis(self):
+        """Return a connected Redis client, or None if REDIS_PORT is unset."""
+        redis_port = os.getenv("REDIS_PORT")
+        if not redis_port:
+            return None
         try:
-            with open(self.fallback_file, 'r') as f:
-                sent_urls = set(line.strip() for line in f if line.strip())
-                return job_url in sent_urls
+            import redis as redis_lib
+
+            host = os.getenv("REDIS_HOST", "localhost")
+            client = redis_lib.Redis(host=host, port=int(redis_port), socket_timeout=3)
+            client.ping()
+            logger.info(f"✅ Redis initialized: {host}:{redis_port}")
+            return client
+        except Exception as e:
+            logger.warning(f"⚠️ Redis init failed, using text-file fallback: {e}")
+            return None
+
+    # ------------------------------------------------------------------
+    # Core API
+    # ------------------------------------------------------------------
+
+    def is_job_sent(self, job_url: str) -> bool:
+        """Return True if *job_url* was previously marked as sent."""
+        if self.redis_client is not None:
+            try:
+                return bool(self.redis_client.exists(f"{_SENT_PREFIX}{job_url}"))
+            except Exception as e:
+                logger.warning(f"⚠️ Redis is_job_sent error: {e}")
+        return self._is_job_sent_fallback(job_url)
+
+    def _is_job_sent_fallback(self, job_url: str) -> bool:
+        try:
+            with open(self.fallback_file, "r") as f:
+                return job_url in {line.strip() for line in f if line.strip()}
         except Exception as e:
             logger.error(f"❌ Fallback file read error: {e}")
             return False
-    
+
     def mark_as_sent(
         self,
         job_url: str,
@@ -120,198 +90,196 @@ class JobDatabase:
         company: str = "",
         location: str = "",
         score: int = 0,
-        metadata: Optional[Dict] = None
+        metadata: Optional[Dict] = None,
     ) -> bool:
-        """
-        Mark a job as sent
-        
-        Args:
-            job_url: Unique job URL
-            title: Job title
-            company: Company name
-            location: Job location
-            score: AI score
-            metadata: Additional data as dict
-            
-        Returns:
-            True if successful, False otherwise
-        """
-        if self.db_available:
-            session = self._get_session()
+        """Persist job_url as sent (with optional metadata)."""
+        if self.redis_client is not None:
             try:
-                # Check if already exists
-                existing = session.query(SentJob).filter_by(job_url=job_url).first()
-                if existing:
-                    logger.debug(f"⚠️ Job already marked as sent: {job_url}")
+                key = f"{_SENT_PREFIX}{job_url}"
+                if self.redis_client.exists(key):
+                    logger.info(f"⚠️ Already marked as sent: {job_url}")
                     return True
-                
-                # Create new record
-                sent_job = SentJob(
-                    job_url=job_url,
-                    title=title,
-                    company=company,
-                    location=location,
-                    score=score,
-                    job_metadata=json.dumps(metadata) if metadata else None
-                )
-                
-                session.add(sent_job)
-                session.commit()
+                mapping = {
+                    "title": title,
+                    "company": company,
+                    "location": location,
+                    "score": str(score),
+                    "sent_at": datetime.now(timezone.utc).isoformat(),
+                    "metadata": json.dumps(metadata) if metadata else "",
+                }
+                # HSET + EXPIRE in a single pipeline round-trip
+                pipe = self.redis_client.pipeline()
+                pipe.hset(key, mapping=mapping)
+                pipe.expire(key, _REDIS_TTL)
+                pipe.execute()
                 return True
-                
             except Exception as e:
-                logger.error(f"❌ Database insert error: {e}")
-                session.rollback()
-                return self._mark_as_sent_fallback(job_url)
-            finally:
-                session.close()
-        else:
-            return self._mark_as_sent_fallback(job_url)
-    
+                logger.error(f"❌ Redis mark_as_sent error: {e}")
+        return self._mark_as_sent_fallback(job_url)
+
     def _mark_as_sent_fallback(self, job_url: str) -> bool:
-        """Mark job as sent using text file"""
         try:
-            with open(self.fallback_file, 'a') as f:
+            with open(self.fallback_file, "a") as f:
                 f.write(f"{job_url}\n")
             return True
         except Exception as e:
             logger.error(f"❌ Fallback file write error: {e}")
             return False
-    
+
     def get_sent_jobs(self, limit: int = 100) -> List[Dict]:
-        """
-        Retrieve recently sent jobs
-        
-        Args:
-            limit: Maximum number of records to return
-            
-        Returns:
-            List of job dicts
-        """
-        if self.db_available:
-            session = self._get_session()
+        """Return up to *limit* recently sent jobs (most recent first)."""
+        if self.redis_client is not None:
             try:
-                jobs = session.query(SentJob)\
-                    .order_by(SentJob.sent_at.desc())\
-                    .limit(limit)\
-                    .all()
-                
-                return [
-                    {
-                        "job_url": job.job_url,
-                        "title": job.title,
-                        "company": job.company,
-                        "location": job.location,
-                        "score": job.score,
-                        "sent_at": job.sent_at.isoformat() if job.sent_at else None,
-                        "metadata": json.loads(job.job_metadata) if job.job_metadata else None
-                    }
-                    for job in jobs
-                ]
+                keys = []
+                cursor = 0
+                while True:
+                    cursor, batch = self.redis_client.scan(
+                        cursor, match=f"{_SENT_PREFIX}*", count=500
+                    )
+                    keys.extend(batch)
+                    if cursor == 0:
+                        break
+
+                results = []
+                for key in keys:
+                    data = self.redis_client.hgetall(key)
+                    if data:
+                        job_url = key.decode().removeprefix(_SENT_PREFIX)
+                        results.append(
+                            {
+                                "job_url": job_url,
+                                "title": data.get(b"title", b"").decode(),
+                                "company": data.get(b"company", b"").decode(),
+                                "location": data.get(b"location", b"").decode(),
+                                "score": int(data.get(b"score", b"0").decode() or 0),
+                                "sent_at": data.get(b"sent_at", b"").decode(),
+                                "metadata": json.loads(data[b"metadata"].decode())
+                                if data.get(b"metadata")
+                                else None,
+                            }
+                        )
+
+                results.sort(key=lambda j: j["sent_at"], reverse=True)
+                return results[:limit]
             except Exception as e:
-                logger.error(f"❌ Database query error: {e}")
+                logger.error(f"❌ Redis get_sent_jobs error: {e}")
                 return []
-            finally:
-                session.close()
-        else:
-            return self._get_sent_jobs_fallback(limit)
+        return self._get_sent_jobs_fallback(limit)
 
     def _get_sent_jobs_fallback(self, limit: int) -> List[Dict]:
-        """Get sent jobs from text file"""
         try:
-            with open(self.fallback_file, 'r') as f:
+            with open(self.fallback_file, "r") as f:
                 urls = [line.strip() for line in f if line.strip()]
-                return [{"job_url": url} for url in urls[-limit:]]
+            return [{"job_url": url} for url in urls[-limit:]]
         except Exception as e:
             logger.error(f"❌ Fallback file read error: {e}")
             return []
-    
+
     def filter_new_jobs(self, jobs: List[Dict]) -> List[Dict]:
-        """
-        Filter out jobs that have already been sent
-        
-        Args:
-            jobs: List of job dicts with 'job_url' key
-            
-        Returns:
-            List of new jobs only
+        """Filter out jobs already seen or sent.
+
+        With Redis:
+          1. Check ``jobdedup:<url>`` (3-day TTL). If present → skip.
+          2. Set ``jobdedup:<url>`` (3-day TTL) so the same job is not
+             re-processed by the LLM within the same window.
+          3. Check ``jobsent:<url>`` (permanent). If present → skip.
+          4. Otherwise → include in returned list.
+
+        Without Redis: checks the text-file fallback only.
         """
         new_jobs = []
-        
+
         for job in jobs:
-            job_url = job.get('job_url') or job.get('job_data', {}).get('job_url')
-            
+            job_url = job.get("job_url") or job.get("job_data", {}).get("job_url")
+
             if not job_url:
                 logger.warning("⚠️ Job missing job_url, skipping")
                 continue
 
+            if self.redis_client is not None:
+                try:
+                    dedup_key = f"{_DEDUP_PREFIX}{job_url}"
+                    if self.redis_client.exists(dedup_key):
+                        logger.info(
+                            f"⏭️ Redis recent-seen duplicate: "
+                            f"{job.get('title', 'Unknown')} at {job.get('company', 'Unknown')}"
+                        )
+                        continue
+                    # Mark as seen for 3 days to avoid LLM re-processing
+                    self.redis_client.set(dedup_key, "1", ex=_REDIS_TTL)
+                except Exception as e:
+                    logger.warning(f"⚠️ Redis dedup check failed, continuing: {e}")
+
             if not self.is_job_sent(job_url):
                 new_jobs.append(job)
             else:
-                logger.debug(f"⏭️ Skipping duplicate: {job.get('title', 'Unknown')} at {job.get('company', 'Unknown')}")
+                logger.debug(
+                    f"⏭️ Skipping sent duplicate: "
+                    f"{job.get('title', 'Unknown')} at {job.get('company', 'Unknown')}"
+                )
 
-        logger.info(f"🆕 {len(new_jobs)}/{len(jobs)} new jobs to send")
+        logger.info(f"🆕 {len(new_jobs)}/{len(jobs)} new jobs to process")
         return new_jobs
-    
-    def cleanup_old_records(self, days: int = 90):
-        """
-        Remove records older than specified days (SQLite only)
-        
-        Args:
-            days: Keep records newer than this many days
-        """
-        if not self.db_available:
-            logger.warning("⚠️ Cleanup only available for database mode")
-            return
 
-        session = self._get_session()
+    def cleanup_old_records(self, days: int = 90):
+        """Delete ``jobsent:`` keys whose ``sent_at`` is older than *days* days."""
+        if self.redis_client is None:
+            logger.warning("⚠️ Cleanup only available when Redis is configured")
+            return
         try:
             from datetime import timedelta
-            cutoff_date = datetime.utcnow() - timedelta(days=days)
 
-            deleted = session.query(SentJob)\
-                .filter(SentJob.sent_at < cutoff_date)\
-                .delete()
-
-            session.commit()
+            cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+            deleted = 0
+            cursor = 0
+            while True:
+                cursor, batch = self.redis_client.scan(
+                    cursor, match=f"{_SENT_PREFIX}*", count=500
+                )
+                for key in batch:
+                    sent_at_raw = self.redis_client.hget(key, "sent_at")
+                    if sent_at_raw:
+                        try:
+                            sent_at = datetime.fromisoformat(sent_at_raw.decode())
+                            if sent_at.tzinfo is None:
+                                sent_at = sent_at.replace(tzinfo=timezone.utc)
+                            if sent_at < cutoff:
+                                self.redis_client.delete(key)
+                                deleted += 1
+                        except ValueError:
+                            pass
+                if cursor == 0:
+                    break
             logger.info(f"🗑️ Cleaned up {deleted} old records (older than {days} days)")
-
         except Exception as e:
             logger.error(f"❌ Cleanup error: {e}")
-            session.rollback()
-        finally:
-            session.close()
 
 
 def main():
-    """Test the database"""
+    """Quick smoke-test of the database module."""
     db = JobDatabase()
-    
-    # Test job
+
     test_url = "https://example.com/job/12345"
     test_job = {
         "job_url": test_url,
         "title": "Senior Engineer",
         "company": "Tech Corp",
         "location": "San Francisco, CA",
-        "score": 8
+        "score": 8,
     }
-    
-    # Check if exists
-    print(f"\n1. Checking if job exists: {db.is_job_sent(test_url)}")
-    
-    # Mark as sent
-    print(f"\n2. Marking job as sent...")
+
+    print(f"\n1. Is job sent? {db.is_job_sent(test_url)}")
+    print("\n2. Marking as sent…")
     db.mark_as_sent(**test_job)
-    
-    # Check again
-    print(f"\n3. Checking if job exists: {db.is_job_sent(test_url)}")
-    
-    # Get recent jobs
-    print(f"\n4. Recent sent jobs:")
-    recent = db.get_sent_jobs(limit=5)
-    for job in recent:
+    print(f"\n3. Is job sent? {db.is_job_sent(test_url)}")
+    print("\n4. Recent sent jobs:")
+    for job in db.get_sent_jobs(limit=5):
         print(f"   - {job.get('title', 'N/A')} at {job.get('company', 'N/A')}")
+
+    # Cleanup test keys
+    if db.redis_client:
+        db.redis_client.delete(f"{_SENT_PREFIX}{test_url}")
+        db.redis_client.delete(f"{_DEDUP_PREFIX}{test_url}")
 
 
 if __name__ == "__main__":
