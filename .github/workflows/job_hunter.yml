@@ -1,11 +1,12 @@
 name: Job Hunter Sentinel - Scheduled Runs
 
 on:
-  # Daily run: 1 PM Eastern Standard Time (EST/UTC-5)
-  # Each run searches for jobs posted in the last 24 hours
-  # Deduplication prevents sending the same job twice
+  # Weekday run: 1 PM Eastern Standard Time (EST/UTC-5)
+  # Cron runs Mon–Fri only; holiday check is handled by the preflight job below.
+  # Each run searches for jobs posted in the last 24 hours.
+  # Deduplication prevents sending the same job twice.
   schedule:
-    - cron: '0 18 * * *'  # 1:00 PM EST (UTC 18:00)
+    - cron: '0 18 * * 1-5'  # 1:00 PM EST (UTC 18:00), Mon–Fri
 
   # Allow manual trigger
   workflow_dispatch:
