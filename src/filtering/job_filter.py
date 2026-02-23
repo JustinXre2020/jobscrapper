@@ -28,7 +28,7 @@ _ANALYZER_PROVIDER = os.getenv("ANALYZER_PROVIDER", "openrouter")
 _ANALYZER_MODEL = os.getenv("ANALYZER_MODEL", "liquid/lfm-2.2-6b")
 
 
-class OpenRouterLLMFilter:
+class LLMFilter:
     """Filter jobs using the per-job LangGraph workflow.
 
     The Summarizer and Analyzer nodes each receive their own ``BaseLLMClient``,
@@ -56,7 +56,7 @@ class OpenRouterLLMFilter:
             provider=_SUMMARIZER_PROVIDER, model=_SUMMARIZER_MODEL
         )
         self.analyzer_client = create_llm_client(
-            provider=_ANALYZER_PROVIDER, model=model
+            provider=_ANALYZER_PROVIDER, model=_ANALYZER_MODEL
         )
 
         self.model = self.analyzer_client.model  # kept for compat / logging

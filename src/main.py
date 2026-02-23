@@ -19,7 +19,7 @@ from storage.database import JobDatabase
 from notification.email_sender import EmailSender
 from storage.data_manager import DataManager
 
-from filtering.job_filter import OpenRouterLLMFilter
+from filtering.job_filter import LLMFilter
 
 from utils.config import parse_recipients, get_all_search_terms, mask_email, get_results_wanted, get_scrape_queries, DEFAULT_RESULTS_WANTED
 
@@ -65,7 +65,7 @@ class JobHunterSentinel:
             self.llm_filter = None
             if self.use_llm_filter:
                 logger.info("🤖 Initializing OpenRouter LLM Filter...")
-                self.llm_filter = OpenRouterLLMFilter()
+                self.llm_filter = LLMFilter()
 
             logger.info("✅ Configuration loaded:")
             logger.info(f"   Recipients: {len(self.recipients)}")

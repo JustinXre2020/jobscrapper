@@ -130,7 +130,7 @@ def route_after_summarize(state: JobState) -> str:
     return "analyzer_ensemble"
 
 
-def build_job_graph(
+def build_graph(
     summarizer_client: Optional[BaseLLMClient] = None,
     analyzer_client: Optional[BaseLLMClient] = None,
 ):
@@ -142,6 +142,8 @@ def build_job_graph(
         analyzer_client: LLM client for the Analyzer node. When None,
             AnalyzerNode reads ANALYZER_PROVIDER / ANALYZER_MODEL env vars.
     """
+    logger.info("Using single-job workflow (Summarizer -> 3x Analyzer ensemble)")
+
     summarizer = SummarizerNode(summarizer_client)
     analyzer = AnalyzerNode(analyzer_client)
 
@@ -153,20 +155,6 @@ def build_job_graph(
     graph.add_conditional_edges("summarizer", route_after_summarize)
     graph.add_edge("analyzer_ensemble", END)
     return graph.compile()
-
-
-def build_graph(
-    summarizer_client: Optional[BaseLLMClient] = None,
-    analyzer_client: Optional[BaseLLMClient] = None,
-):
-    """Build the single-job graph.
-
-    Args:
-        summarizer_client: LLM client for Summarizer (or None to use env defaults).
-        analyzer_client: LLM client for Analyzer (or None to use env defaults).
-    """
-    logger.info("Using single-job workflow (Summarizer -> 3x Analyzer ensemble)")
-    return build_job_graph(summarizer_client, analyzer_client)
 
 
 async def run_single_job(
