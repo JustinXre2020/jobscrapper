@@ -5,8 +5,8 @@ Public interface:
     analyzer_node(state, llm_client)  — module-level shim for backwards compat
 """
 
+import asyncio
 import json
-import os
 from loguru import logger
 from typing import Any, Dict, List, Optional
 
@@ -16,6 +16,17 @@ from infra.json_repair import repair_json
 from agent.state import AgentState
 from agent.nodes.base import BaseNode
 from agent.prompts.analyzer_prompt import ANALYZER_SYSTEM, build_analyzer_prompt
+from utils.config import settings
+
+
+# Fields evaluated by majority vote across the ensemble
+BOOLEAN_FIELDS = [
+    "keyword_match",
+    "visa_sponsorship",
+    "entry_level",
+    "requires_phd",
+    "is_internship",
+]
 
 
 def _deterministic_eval(
@@ -98,15 +109,33 @@ def _parse_text_fallback(response_text: str) -> Dict[str, Any]:
 
 
 def _build_analyzer_client() -> BaseLLMClient:
-    """Construct the LLM client for Analyzer from env vars.
+    """Construct the LLM client for Analyzer from settings."""
+    return create_llm_client(
+        provider=settings.analyzer_provider,
+        model=settings.analyzer_model,
+    )
 
-    Env vars (all optional):
-        ANALYZER_PROVIDER  -- 'openrouter' or 'local' (default: 'openrouter')
-        ANALYZER_MODEL     -- model name (default: 'liquid/lfm-2.2-6b')
-    """
-    provider = os.getenv("ANALYZER_PROVIDER", "openrouter")
-    model = os.getenv("ANALYZER_MODEL", "liquid/lfm-2.2-6b")
-    return create_llm_client(provider=provider, model=model)
+
+def _majority_vote_evaluation(results: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Return a consensus evaluation dict by majority vote over boolean fields."""
+    evaluation: Dict[str, Any] = {}
+    total = len(results)
+    for field in BOOLEAN_FIELDS:
+        true_votes = sum(1 for r in results if bool(r.get(field, False)))
+        evaluation[field] = true_votes > (total / 2)
+    return evaluation
+
+
+def _pick_closest_reason(results: List[Dict[str, Any]], evaluation: Dict[str, Any]) -> str:
+    """Return the reason from the ensemble member whose votes best match the consensus."""
+    def distance(result: Dict[str, Any]) -> int:
+        return sum(
+            bool(result.get(f, False)) != bool(evaluation.get(f, False))
+            for f in BOOLEAN_FIELDS
+        )
+
+    best = min(results, key=distance)
+    return best.get("reason", "")
 
 
 class AnalyzerNode(BaseNode):
@@ -130,7 +159,7 @@ class AnalyzerNode(BaseNode):
         search_terms: List[str],
         accumulated_feedback: List[str],
         job: Dict[str, Any],
-        temperature: Optional[float] = None,
+        temperature: Optional[float] = 0.0,
     ) -> Dict[str, Any]:
         """Call the analyzer LLM once and return the evaluation dict."""
         job_context = self._job_context(job)
@@ -158,13 +187,16 @@ class AnalyzerNode(BaseNode):
             return _parse_text_fallback(response_text)
 
     async def __call__(self, state: AgentState) -> Dict[str, Any]:
-        """Evaluate job against filter criteria using the structured summary.
+        """Evaluate job against filter criteria using an ensemble of LLM calls.
+
+        Runs ``len(ANALYZER_TEMPERATURES)`` parallel analyzer calls, combines them
+        by majority vote, then applies deterministic overrides for unambiguous fields.
 
         Args:
             state: Current agent state with 'job', 'summary', 'search_terms'.
 
         Returns:
-            State updates: {'evaluation': dict} on success or {'error': str}.
+            State updates: ``{'evaluation': dict}`` on success or ``{'error': str}``.
         """
         summary = state.get("summary")
         search_terms = state["search_terms"]
@@ -180,31 +212,50 @@ class AnalyzerNode(BaseNode):
         try:
             deterministic = _deterministic_eval(summary, search_terms)
 
-            result = await self._call_llm_analyzer(
-                summary, search_terms, accumulated_feedback, job
-            )
+            # Run all 3 ensemble members in parallel
+            calls = [
+                self._call_llm_analyzer(
+                    summary, search_terms, accumulated_feedback, job
+                )
+                for _ in range(3)
+            ]
+            raw_results = await asyncio.gather(*calls, return_exceptions=True)
 
-            # Apply deterministic overrides on top of LLM result
+            analyzer_results: List[Dict[str, Any]] = []
+            for item in raw_results:
+                if isinstance(item, Exception):
+                    logger.warning(f"Analyzer ensemble call failed [{job_context}]: {item}")
+                    continue
+                analyzer_results.append(item)
+
+            if not analyzer_results:
+                return {"error": f"All analyzer ensemble calls failed [{job_context}]"}
+
+            evaluation = _majority_vote_evaluation(analyzer_results)
+
+            # Deterministic rules override model votes when explicit signals are present
             for field, value in deterministic.items():
-                if value is not None and result.get(field) != value:
-                    logger.debug(
-                        f"Deterministic override [{job_context}]: "
-                        f"{field} {result.get(field)} -> {value}"
-                    )
-                    result[field] = value
+                if value is not None:
+                    if evaluation.get(field) != value:
+                        logger.debug(
+                            f"Deterministic override [{job_context}]: "
+                            f"{field} {evaluation.get(field)} -> {value}"
+                        )
+                    evaluation[field] = value
 
-            result["job_title"] = job_title
-            result["company"] = company
+            evaluation["reason"] = _pick_closest_reason(analyzer_results, evaluation)
+            evaluation["job_title"] = job_title
+            evaluation["company"] = company
 
             logger.info(
                 f"EVALUATED [{job_context}]: "
-                f"keyword={result.get('keyword_match')}, "
-                f"visa={result.get('visa_sponsorship')}, "
-                f"entry={result.get('entry_level')}, "
-                f"phd={result.get('requires_phd')}, "
-                f"intern={result.get('is_internship')}"
+                f"keyword={evaluation.get('keyword_match')}, "
+                f"visa={evaluation.get('visa_sponsorship')}, "
+                f"entry={evaluation.get('entry_level')}, "
+                f"phd={evaluation.get('requires_phd')}, "
+                f"intern={evaluation.get('is_internship')}"
             )
-            return {"evaluation": result}
+            return {"evaluation": evaluation}
 
         except LLMClientError as e:
             logger.warning(f"Analyzer LLM error [{job_context}]: {e}")
@@ -228,24 +279,6 @@ class AnalyzerNode(BaseNode):
         except Exception as e:
             logger.error(f"Analyzer unexpected error [{job_context}]: {e}")
             return {"error": str(e)}
-
-
-# ---------------------------------------------------------------------------
-# Backwards-compat shim — existing callers that pass `llm_client` explicitly
-# ---------------------------------------------------------------------------
-
-async def _call_llm_analyzer(
-    summary: Dict[str, Any],
-    search_terms: List[str],
-    accumulated_feedback: List[str],
-    llm_client: BaseLLMClient,
-    job: Dict[str, Any],
-    temperature: Optional[float] = None,
-) -> Dict[str, Any]:
-    """Module-level wrapper kept for backwards compatibility."""
-    return await AnalyzerNode(llm_client)._call_llm_analyzer(
-        summary, search_terms, accumulated_feedback, job, temperature
-    )
 
 
 async def analyzer_node(state: AgentState, llm_client: BaseLLMClient) -> Dict[str, Any]:

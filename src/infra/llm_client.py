@@ -13,17 +13,15 @@ Backwards compat:
 """
 
 import asyncio
-import os
 from abc import ABC, abstractmethod
 from loguru import logger
 from typing import Any, Dict, List, Optional, Type, TypeVar
 
-from dotenv import load_dotenv
-from openai import AsyncOpenAI
 from pydantic import BaseModel
 import instructor
+from openai import AsyncOpenAI
 
-load_dotenv()
+from utils.config import settings
 
 
 T = TypeVar("T", bound=BaseModel)
@@ -163,12 +161,12 @@ class OpenRouterClient(_RetryMixin, BaseLLMClient):
         api_url: Optional[str] = None,
         api_key: Optional[str] = None,
         model: Optional[str] = None,
-        temperature: float = 0.1,
+        temperature: float = 0,
         max_tokens: int = 8192,
     ) -> None:
-        self.api_url = api_url or os.getenv("OPENROUTER_API_URL", "https://openrouter.ai/api/v1")
-        self.api_key = api_key or os.getenv("OPENROUTER_API_KEY", "")
-        self.model = model or os.getenv("OPENROUTER_MODEL", "liquid/lfm-2.5-1.2b-instruct:free")
+        self.api_url = api_url or settings.openrouter_api_url
+        self.api_key = api_key or settings.openrouter_api_key
+        self.model = model or settings.openrouter_model
         self.temperature = temperature
         self.max_tokens = max_tokens
 
@@ -278,10 +276,10 @@ class LocalInferenceClient(_RetryMixin, BaseLLMClient):
         temperature: float = 0.1,
         max_tokens: int = 8192,
     ) -> None:
-        self.api_url = api_url or os.getenv("LOCAL_LLM_API_URL", "http://localhost:11434/v1")
+        self.api_url = api_url or settings.local_llm_api_url
         # Local servers often accept any non-empty key value
-        self.api_key = api_key or os.getenv("LOCAL_LLM_API_KEY", "local")
-        self.model = model or os.getenv("LOCAL_LLM_MODEL", "xiaomi")
+        self.api_key = api_key or settings.local_llm_api_key
+        self.model = model or settings.local_llm_model
         self.temperature = temperature
         self.max_tokens = max_tokens
 
@@ -388,7 +386,7 @@ def create_llm_client(
     """
     if provider is None:
         # Auto-detect: use local when no OpenRouter key is configured
-        provider = "openrouter" if os.getenv("OPENROUTER_API_KEY") else "local"
+        provider = "openrouter" if settings.openrouter_api_key else "local"
 
     if provider == "local":
         return LocalInferenceClient(model=model, temperature=temperature, max_tokens=max_tokens)

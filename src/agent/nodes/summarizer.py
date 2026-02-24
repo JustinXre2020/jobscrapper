@@ -5,7 +5,6 @@ Public interface:
     summarizer_node(state, llm_client)  — module-level shim for backwards compat
 """
 
-import os
 from loguru import logger
 from typing import Any, Dict, Optional
 
@@ -16,6 +15,7 @@ from infra.models import JobSummaryModel
 from agent.state import AgentState
 from agent.nodes.base import BaseNode
 from agent.prompts.summarizer_prompt import SUMMARIZER_SYSTEM, build_summarizer_prompt
+from utils.config import settings
 
 
 def _safe_str(value: Any, default: str = "") -> str:
@@ -26,15 +26,11 @@ def _safe_str(value: Any, default: str = "") -> str:
 
 
 def _build_summarizer_client() -> BaseLLMClient:
-    """Construct the LLM client for Summarizer from env vars.
-
-    Env vars (all optional):
-        SUMMARIZER_PROVIDER  -- 'local' or 'openrouter' (default: 'local')
-        SUMMARIZER_MODEL     -- model name (default: provider-specific default)
-    """
-    provider = os.getenv("SUMMARIZER_PROVIDER", "local")
-    model = os.getenv("SUMMARIZER_MODEL") or None  # None → provider default
-    return create_llm_client(provider=provider, model=model)
+    """Construct the LLM client for Summarizer from settings."""
+    return create_llm_client(
+        provider=settings.summarizer_provider,
+        model=settings.summarizer_model,
+    )
 
 
 class SummarizerNode(BaseNode):

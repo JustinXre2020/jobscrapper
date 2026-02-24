@@ -11,7 +11,6 @@ Usage:
 
 import asyncio
 import json
-import os
 import sys
 from copy import deepcopy
 from pathlib import Path
@@ -20,8 +19,8 @@ from typing import Any, Dict, List
 from loguru import logger
 from langgraph.graph.state import CompiledStateGraph
 
-# Ensure project root is importable
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+# Ensure src/ is on the path so project modules are importable
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from sklearn.metrics import (
     accuracy_score,
@@ -31,7 +30,14 @@ from sklearn.metrics import (
 )
 
 from agent import build_graph, run_single_job
-from infra.llm_client import LLMClient, create_llm_client
+from infra.llm_client import create_llm_client
+from utils.config import settings
+
+_SUMMARIZER_PROVIDER = settings.summarizer_provider
+_SUMMARIZER_MODEL = settings.summarizer_model
+
+_ANALYZER_PROVIDER = settings.analyzer_provider
+_ANALYZER_MODEL = settings.analyzer_model
 
 EVAL_FIELDS = [
     "keyword_match",
@@ -41,17 +47,9 @@ EVAL_FIELDS = [
     "requires_phd",
 ]
 
-_SUMMARIZER_PROVIDER = os.getenv("SUMMARIZER_PROVIDER", "openrouter")
-_SUMMARIZER_MODEL = os.getenv("SUMMARIZER_MODEL", "xiaomi/mimo-v2-flash")
-
-_ANALYZER_PROVIDER = os.getenv("ANALYZER_PROVIDER", "openrouter")
-_ANALYZER_MODEL = os.getenv("ANALYZER_MODEL", "liquid/lfm-2.2-6b")
-
 DATA_PATH = Path(__file__).parent.parent / "data" / "evaluated_jobs.json"
-
 ALL_SEARCH_TERMS = ["software engineer", "data analyst", "data engineer", "product manager"]
-
-CONCURRENCY = 50
+CONCURRENCY = settings.agent_concurrency
 
 
 def _load_eval_data() -> List[Dict[str, Any]]:
@@ -216,13 +214,7 @@ async def _run_all(
 
 async def run_eval() -> None:
     """Run full evaluation and print report."""
-    api_key = os.getenv("OPENROUTER_API_KEY", "")
-    if not api_key:
-        print("ERROR: OPENROUTER_API_KEY not set")
-        sys.exit(1)
-
     eval_data = _load_eval_data()
-
     summarizer_client = create_llm_client(
         provider=_SUMMARIZER_PROVIDER, model=_SUMMARIZER_MODEL
     )

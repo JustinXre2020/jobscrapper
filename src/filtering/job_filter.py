@@ -3,29 +3,19 @@
 Current workflow is strictly per-job:
     Summarizer -> (3 parallel Analyzer calls) -> majority-voted evaluation
 
-Each node uses its own LLM client configured via env vars:
-    SUMMARIZER_PROVIDER / SUMMARIZER_MODEL  -- for the Summarizer node
-    ANALYZER_PROVIDER   / ANALYZER_MODEL    -- for the Analyzer ensemble
+Each node uses its own LLM client configured via settings:
+    summarizer_provider / summarizer_model  -- for the Summarizer node
+    analyzer_provider   / analyzer_model    -- for the Analyzer ensemble
 """
 
 import asyncio
 from loguru import logger
-import os
-from typing import Dict, List, Optional
+from typing import Dict, List
 
-from agent.feedback.store import create_feedback_store
+from agent.feedback.store import feedback_store
 from agent.graph import build_graph, run_single_job
-from infra.llm_client import BaseLLMClient, create_llm_client
-
-
-AGENT_CONCURRENCY = int(os.getenv("AGENT_CONCURRENCY", "50"))
-
-# --- Per-node defaults ---
-_SUMMARIZER_PROVIDER = os.getenv("SUMMARIZER_PROVIDER", "openrouter")
-_SUMMARIZER_MODEL = os.getenv("SUMMARIZER_MODEL", "xiaomi/mimo-v2-flash")
-
-_ANALYZER_PROVIDER = os.getenv("ANALYZER_PROVIDER", "openrouter")
-_ANALYZER_MODEL = os.getenv("ANALYZER_MODEL", "liquid/lfm-2.2-6b")
+from infra.llm_client import create_llm_client
+from utils.config import settings
 
 
 class LLMFilter:
@@ -37,52 +27,34 @@ class LLMFilter:
 
     def __init__(
         self,
-        model: Optional[str] = None,
-        concurrency: int = AGENT_CONCURRENCY,
-        rate_limit_delay: float = 60
+        concurrency: int = 0,
+        rate_limit_delay: float = 60,
     ) -> None:
         """
         Args:
             model: Legacy single-model override. When provided, sets the Analyzer
-                   model to this value (for backwards compatibility). Per-node env
-                   vars take precedence over this argument.
-            concurrency: Max number of jobs processed in parallel.
+                   model to this value (for backwards compatibility). Per-node
+                   settings take precedence over this argument.
+            concurrency: Max number of jobs processed in parallel (0 = use settings).
             rate_limit_delay: Seconds to wait between concurrency-sized batches.
-            summarizer_client: Explicit Summarizer client (overrides env defaults).
-            analyzer_client: Explicit Analyzer client (overrides env defaults).
         """
-        # Build per-node clients from env vars unless callers inject them directly
+        # Build per-node clients from settings; `model` arg overrides analyzer model
         self.summarizer_client = create_llm_client(
-            provider=_SUMMARIZER_PROVIDER, model=_SUMMARIZER_MODEL
+            provider=settings.summarizer_provider, model=settings.summarizer_model
         )
         self.analyzer_client = create_llm_client(
-            provider=_ANALYZER_PROVIDER, model=_ANALYZER_MODEL
+            provider=settings.analyzer_provider, model=settings.analyzer_model
         )
 
-        self.model = self.analyzer_client.model  # kept for compat / logging
-        self.concurrency = concurrency
+        self.feedback_store = feedback_store
+        self.concurrency = concurrency or settings.agent_concurrency
         self.rate_limit_delay = rate_limit_delay
-
-        embedding_client = None
-        use_vector = os.getenv("USE_VECTOR_FEEDBACK", "false").lower() == "true"
-        if use_vector:
-            try:
-                from infra import EmbeddingClient
-
-                embedding_client = EmbeddingClient()
-            except ImportError:
-                logger.warning("sentence-transformers not installed, using JSONL feedback")
-
-        self.feedback_store = create_feedback_store(embedding_client)
         self.compiled_graph = build_graph(self.summarizer_client, self.analyzer_client)
-        self.is_free_model = ":free" in self.model.lower()
 
         logger.info("Agent workflow LLM Filter initialized (single-job ensemble mode)")
-        logger.info(f"   Summarizer: {self.summarizer_client.model} ({_SUMMARIZER_PROVIDER})")
-        logger.info(f"   Analyzer:   {self.model} ({_ANALYZER_PROVIDER})")
+        logger.info(f"   Summarizer: {self.summarizer_client.model} ({settings.summarizer_provider})")
+        logger.info(f"   Analyzer:   {self.analyzer_client.model} ({settings.analyzer_provider})")
         logger.info(f"   Batch size: {self.concurrency}")
-        if self.is_free_model:
-            logger.warning("   Free model detected - rate limited (~19 req/min)")
 
     async def _process_single_job(
         self,
@@ -272,17 +244,11 @@ class LLMFilter:
         logger.info(f"   Tracked {no_visa_count} jobs without visa sponsorship (not filtered)")
         logger.info(f"   {filtered_count} jobs passed agent workflow filter")
 
-    def filter_jobs_parallel(
+    def batch_filter_jobs(
         self,
         jobs_list: List[Dict],
         search_terms: List[str],
-        num_workers: int = 0,
         verbose: bool = True,
     ) -> List[Dict]:
         """Backwards-compatible method that uses async agent workflow."""
-        if num_workers > 0:
-            logger.warning(
-                f"   num_workers={num_workers} ignored, "
-                f"using agent batch size={self.concurrency}"
-            )
         return asyncio.run(self._filter_jobs(jobs_list, search_terms, verbose))

@@ -1,22 +1,115 @@
 """
-Recipient configuration for Job Hunter Sentinel
-Supports multi-recipient with per-recipient search terms and sponsorship needs
+Centralised configuration for Job Hunter Sentinel.
+
+All environment variables are declared once in ``Settings`` (pydantic-settings).
+The module-level ``settings`` singleton is the single source of truth — every
+other module should import from here instead of calling ``os.getenv`` directly.
+
+Usage:
+
+    from utils.config import settings
+
+    print(settings.hours_old)          # typed int, default 24
+    print(settings.gmail_email)        # Optional[str]
 """
-import os
+
 import json
-from loguru import logger
 from dataclasses import dataclass
-from typing import Dict, List
-from dotenv import load_dotenv
+from pathlib import Path
+from typing import Dict, List, Optional
+
+from loguru import logger
+from pydantic import field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
 from infra.logging_config import configure_logging
 
-load_dotenv()
+# Resolve .env relative to this file so it's always found regardless of cwd
+_ENV_FILE = Path(__file__).parent.parent.parent / ".env"
 
 
-# --- Search Term Configuration ---
+# ---------------------------------------------------------------------------
+# Settings — every env var the application reads, with types and defaults
+# ---------------------------------------------------------------------------
 
-# Combined search term groups: group name -> list of queries to scrape
-# "business analyst/data analyst" scrapes for both terms, results stored under the group name
+class Settings(BaseSettings):
+    """Application settings loaded from environment variables / .env file.
+
+    pydantic-settings maps ``UPPER_CASE`` env vars to ``lower_case`` fields
+    automatically, so ``GMAIL_EMAIL`` → ``settings.gmail_email``.
+    """
+
+    model_config = SettingsConfigDict(
+        env_file=str(_ENV_FILE),
+        env_file_encoding="utf-8",
+        extra="ignore",          # silently ignore unknown env vars
+        case_sensitive=False,
+    )
+
+    # --- Email ---------------------------------------------------------------
+    gmail_email: Optional[str] = None
+    gmail_app_password: Optional[str] = None
+
+    # --- Recipients ----------------------------------------------------------
+    #: JSON array string: '[{"email":…, "needs_sponsorship":…, "search_terms":[…]}]'
+    recipients: Optional[str] = None
+    results_wanted: int = 10
+    #: JSON object mapping search term → results count, e.g. '{"data analyst": 20}'
+    results_wanted_map: str = "{}"
+
+    # --- Scraping ------------------------------------------------------------
+    #: Comma-separated job board names, e.g. "indeed,linkedin"
+    sites: str = "indeed"
+    #: Comma-separated locations, e.g. "San Francisco, CA,New York, NY"
+    locations: str = "San Francisco, CA"
+    #: Only return jobs posted within this many hours
+    hours_old: int = 24
+
+    # --- LLM: OpenRouter -----------------------------------------------------
+    openrouter_api_url: str = "https://openrouter.ai/api/v1"
+    openrouter_api_key: str = ""
+    openrouter_model: str = "liquid/lfm-2.5-1.2b-thinking:free"
+
+    # --- LLM: Local inference (Ollama / llama.cpp / etc.) --------------------
+    local_llm_api_url: str = "http://localhost:11434/v1"
+    #: API key sent to the local server (most servers accept any non-empty value)
+    local_llm_api_key: str = "local"
+    local_llm_model: str = "liquid/lfm-2.5-1.2b-thinking"
+
+    # --- Redis IP Address and ports ------------------------------------------
+    REDIS_HOST: str = None
+    REDIS_PORT: int = None
+
+    # --- Per-node model routing ----------------------------------------------
+    summarizer_provider: str = "local"
+    summarizer_model: Optional[str] = None   # None → use provider default
+    analyzer_provider: str = "openrouter"
+    analyzer_model: str = "liquid/lfm-2.2-6b"
+
+    # --- Workflow ------------------------------------------------------------
+    #: Max concurrent jobs processed in a single LLM batch
+    agent_concurrency: int = 50
+
+    # --- Computed helpers (not env vars) ------------------------------------
+
+    @field_validator("results_wanted_map", mode="before")
+    @classmethod
+    def _coerce_results_wanted_map(cls, v: str) -> str:
+        """Accept the raw JSON string as-is; parse errors handled later."""
+        return v or "{}"
+
+
+#: Singleton — import this in all consumer modules.
+settings = Settings()
+
+
+# ---------------------------------------------------------------------------
+# Search-term group configuration (static, not from env)
+# ---------------------------------------------------------------------------
+
+# Combined search term groups: group name -> list of queries to scrape.
+# "business analyst/data analyst" scrapes for both terms and stores results
+# under the group name for deduplication.
 SEARCH_TERM_GROUPS: Dict[str, List[str]] = {
     "business analyst/data analyst": ["business analyst", "data analyst"],
 }
@@ -27,26 +120,30 @@ for _group_name, _terms in SEARCH_TERM_GROUPS.items():
     for _term in _terms:
         _TERM_TO_GROUP[_term.lower().strip()] = _group_name
 
-# Per-term scrape counts (from env)
-DEFAULT_RESULTS_WANTED: int = int(os.getenv("RESULTS_WANTED", "10"))
+# Per-term scrape counts parsed from RESULTS_WANTED_MAP
+DEFAULT_RESULTS_WANTED: int = settings.results_wanted
 
-_results_map_json = os.getenv("RESULTS_WANTED_MAP", "{}")
 try:
     RESULTS_WANTED_MAP: Dict[str, int] = {
-        k.lower().strip(): int(v) for k, v in json.loads(_results_map_json).items()
+        k.lower().strip(): int(v)
+        for k, v in json.loads(settings.results_wanted_map).items()
     }
 except (json.JSONDecodeError, ValueError) as e:
     logger.warning(f"Invalid RESULTS_WANTED_MAP JSON, using empty map: {e}")
-    RESULTS_WANTED_MAP: Dict[str, int] = {}
+    RESULTS_WANTED_MAP = {}
 
+
+# ---------------------------------------------------------------------------
+# Helper functions
+# ---------------------------------------------------------------------------
 
 def normalize_search_term(term: str) -> str:
-    """Map individual terms to their group name if part of a group, otherwise return as-is."""
+    """Map individual terms to their group name if part of a group, else return as-is."""
     return _TERM_TO_GROUP.get(term.lower().strip(), term.strip())
 
 
 def get_results_wanted(term: str) -> int:
-    """Get results_wanted count for a search term (or group)."""
+    """Get the results_wanted count for a search term (or group)."""
     return RESULTS_WANTED_MAP.get(term.lower().strip(), DEFAULT_RESULTS_WANTED)
 
 
@@ -59,45 +156,46 @@ def get_scrape_queries(term: str) -> List[str]:
 
 
 def mask_email(email: str) -> str:
-    """Mask email address for privacy in logs (e.g., j***n@gmail.com)"""
-    if not email or '@' not in email:
-        return '***'
-    local, domain = email.split('@', 1)
+    """Mask email address for privacy in logs (e.g., j***n@gmail.com)."""
+    if not email or "@" not in email:
+        return "***"
+    local, domain = email.split("@", 1)
     if len(local) <= 2:
-        masked_local = local[0] + '***'
+        masked_local = local[0] + "***"
     else:
-        masked_local = local[0] + '***' + local[-1]
+        masked_local = local[0] + "***" + local[-1]
     return f"{masked_local}@{domain}"
 
 
+# ---------------------------------------------------------------------------
+# Recipient dataclass + parsing
+# ---------------------------------------------------------------------------
+
 @dataclass
 class Recipient:
-    """Recipient configuration with search preferences"""
+    """Recipient configuration with search preferences."""
     email: str
     needs_sponsorship: bool
     search_terms: List[str]
 
 
 def parse_recipients() -> List[Recipient]:
-    """
-    Parse recipient configuration from environment variables.
+    """Parse recipient configuration from environment variables.
 
     Priority:
-    1. RECIPIENTS (JSON array) - new format with per-recipient search terms
-    2. RECIPIENT_EMAIL (string) - legacy fallback with global SEARCH_TERMS
+    1. ``RECIPIENTS`` (JSON array) — new format with per-recipient search terms
+    2. ``RECIPIENT_EMAIL`` (string) — legacy fallback with global SEARCH_TERMS
 
     Returns:
-        List of Recipient objects
+        List of Recipient objects.
 
     Raises:
-        ValueError: If no valid recipient configuration found
+        ValueError: If no valid recipient configuration found.
     """
     # Try new JSON format first
-    recipients_json = os.getenv("RECIPIENTS")
-
-    if recipients_json:
+    if settings.recipients:
         try:
-            recipients_data = json.loads(recipients_json)
+            recipients_data = json.loads(settings.recipients)
             recipients = []
 
             for r in recipients_data:
@@ -108,25 +206,28 @@ def parse_recipients() -> List[Recipient]:
                 needs_sponsorship = r.get("needs_sponsorship", True)
                 search_terms = r.get("search_terms", [])
 
-                # Validate search_terms is a list
+                # Normalise search_terms to a list
                 if isinstance(search_terms, str):
-                    search_terms = [term.strip() for term in search_terms.split(",") if term.strip()]
+                    search_terms = [t.strip() for t in search_terms.split(",") if t.strip()]
                 elif not isinstance(search_terms, list):
                     search_terms = []
 
-                # Normalize terms (merge groups) and deduplicate
+                # Normalise group membership and deduplicate
                 search_terms = list(dict.fromkeys(normalize_search_term(t) for t in search_terms))
 
                 recipients.append(Recipient(
                     email=email,
                     needs_sponsorship=needs_sponsorship,
-                    search_terms=search_terms
+                    search_terms=search_terms,
                 ))
 
-            # Debug: log recipients list (with masked emails)
             logger.debug(f"{len(recipients)} recipient(s) loaded")
             for i, r in enumerate(recipients):
-                logger.debug(f"recipient[{i}] = email={mask_email(r.email)}, needs_sponsorship={r.needs_sponsorship}, search_terms={r.search_terms}")
+                logger.debug(
+                    f"recipient[{i}] = email={mask_email(r.email)}, "
+                    f"needs_sponsorship={r.needs_sponsorship}, "
+                    f"search_terms={r.search_terms}"
+                )
 
             if recipients:
                 logger.info(f"Loaded {len(recipients)} recipient(s) from RECIPIENTS config")
@@ -137,40 +238,34 @@ def parse_recipients() -> List[Recipient]:
             # Fall through to legacy format
 
     # Legacy fallback: single recipient with global search terms
-    recipient_email = os.getenv("RECIPIENT_EMAIL")
-
-    if not recipient_email:
+    if not settings.recipient_email:
         raise ValueError(
             "No recipient configuration found. "
             "Set RECIPIENTS (JSON) or RECIPIENT_EMAIL environment variable."
         )
 
-    # Get global search terms for legacy mode
-    search_terms_str = os.getenv("SEARCH_TERMS", "entry level software engineer")
-    search_terms = [term.strip() for term in search_terms_str.split(",") if term.strip()]
+    search_terms = [t.strip() for t in settings.search_terms.split(",") if t.strip()]
     search_terms = list(dict.fromkeys(normalize_search_term(t) for t in search_terms))
 
-    logger.info(f"Using legacy config: {mask_email(recipient_email)} (needs_sponsorship=True)")
+    logger.info(
+        f"Using legacy config: {mask_email(settings.recipient_email)} (needs_sponsorship=True)"
+    )
 
     return [Recipient(
-        email=recipient_email,
+        email=settings.recipient_email,
         needs_sponsorship=True,  # Legacy default
-        search_terms=search_terms
+        search_terms=search_terms,
     )]
 
 
 def get_all_search_terms(recipients: List[Recipient]) -> List[str]:
-    """
-    Collect all unique search terms across all recipients.
-
-    Args:
-        recipients: List of Recipient objects
+    """Collect all unique search terms across all recipients.
 
     Returns:
-        List of unique search terms (preserves first occurrence order)
+        Deduplicated list of search terms (preserves first-occurrence order).
     """
-    seen = set()
-    unique_terms = []
+    seen: set = set()
+    unique_terms: List[str] = []
 
     for recipient in recipients:
         for term in recipient.search_terms:
@@ -182,40 +277,13 @@ def get_all_search_terms(recipients: List[Recipient]) -> List[str]:
 
     return unique_terms
 
-
-def main():
-    """Test configuration parsing"""
-    configure_logging(log_file_prefix="config", third_party_levels={})
-    logger.info("Testing configuration parsing...")
-
-    # Test normalization helpers
-    logger.info("\n--- Normalization Tests ---")
-    logger.info(f"normalize('business analyst') -> '{normalize_search_term('business analyst')}'")
-    logger.info(f"normalize('data analyst') -> '{normalize_search_term('data analyst')}'")
-    logger.info(f"normalize('product manager') -> '{normalize_search_term('product manager')}'")
-    logger.info(f"get_results_wanted('product manager') -> {get_results_wanted('product manager')}")
-    logger.info(f"get_results_wanted('data scientist') -> {get_results_wanted('data scientist')}")
-    logger.info(f"get_results_wanted('data engineer') -> {get_results_wanted('data engineer')}")
-    logger.info(f"get_results_wanted('business analyst/data analyst') -> {get_results_wanted('business analyst/data analyst')}")
-    logger.info(f"get_results_wanted('software engineer') -> {get_results_wanted('software engineer')}")
-    logger.info(f"get_scrape_queries('business analyst/data analyst') -> {get_scrape_queries('business analyst/data analyst')}")
-    logger.info(f"get_scrape_queries('product manager') -> {get_scrape_queries('product manager')}")
-
-    # Test with current env
-    try:
-        recipients = parse_recipients()
-        logger.info(f"\nParsed {len(recipients)} recipient(s):")
-        for r in recipients:
-            logger.info(f"  - {mask_email(r.email)}")
-            logger.info(f"    needs_sponsorship: {r.needs_sponsorship}")
-            logger.info(f"    search_terms: {r.search_terms}")
-
-        all_terms = get_all_search_terms(recipients)
-        logger.info(f"All unique search terms: {all_terms}")
-
-    except ValueError as e:
-        logger.error(f"Error: {e}")
-
-
-if __name__ == "__main__":
-    main()
+def setup_logging() -> str:
+    """Configure logging to output to both console and file."""
+    return configure_logging(
+        log_file_prefix="job_hunter",
+        third_party_levels={
+            "llm_filter": "DEBUG",
+            "aiohttp": "WARNING",
+            "urllib3": "WARNING",
+        },
+    )

@@ -4,13 +4,14 @@ Uses Redis when REDIS_PORT is configured; falls back to a text file otherwise.
 """
 import os
 import json
+
 from loguru import logger
 from pathlib import Path
 from typing import Optional, Dict, List
 from datetime import datetime, timezone
-from dotenv import load_dotenv
+import redis as redis_lib
 
-load_dotenv()
+from utils.config import settings
 
 _REDIS_TTL = 259200  # 3 days in seconds (jobdedup: seen-recently cache)
 _DEDUP_PREFIX = "jobdedup:"   # ephemeral: seen in last 3 days
@@ -47,16 +48,14 @@ class JobDatabase:
 
     def _init_redis(self):
         """Return a connected Redis client, or None if REDIS_PORT is unset."""
-        redis_port = os.getenv("REDIS_PORT")
-        if not redis_port:
+        redis_host = settings.REDIS_HOST
+        if not redis_host:
             return None
         try:
-            import redis as redis_lib
-
-            host = os.getenv("REDIS_HOST", "localhost")
-            client = redis_lib.Redis(host=host, port=int(redis_port), socket_timeout=3)
+            redis_port = settings.REDIS_PORT
+            client = redis_lib.Redis(host=redis_host, port=int(redis_port), socket_timeout=3)
             client.ping()
-            logger.info(f"✅ Redis initialized: {host}:{redis_port}")
+            logger.info(f"✅ Redis initialized: {redis_host}:{redis_port}")
             return client
         except Exception as e:
             logger.warning(f"⚠️ Redis init failed, using text-file fallback: {e}")
@@ -93,29 +92,29 @@ class JobDatabase:
         metadata: Optional[Dict] = None,
     ) -> bool:
         """Persist job_url as sent (with optional metadata)."""
-        if self.redis_client is not None:
-            try:
-                key = f"{_SENT_PREFIX}{job_url}"
-                if self.redis_client.exists(key):
-                    logger.info(f"⚠️ Already marked as sent: {job_url}")
-                    return True
-                mapping = {
-                    "title": title,
-                    "company": company,
-                    "location": location,
-                    "score": str(score),
-                    "sent_at": datetime.now(timezone.utc).isoformat(),
-                    "metadata": json.dumps(metadata) if metadata else "",
-                }
-                # HSET + EXPIRE in a single pipeline round-trip
-                pipe = self.redis_client.pipeline()
-                pipe.hset(key, mapping=mapping)
-                pipe.expire(key, _REDIS_TTL)
-                pipe.execute()
+        if self.redis_client is None:
+            return self._mark_as_sent_fallback(job_url)
+        try:
+            key = f"{_SENT_PREFIX}{job_url}"
+            if self.redis_client.exists(key):
+                logger.info(f"⚠️ Already marked as sent: {job_url}")
                 return True
-            except Exception as e:
-                logger.error(f"❌ Redis mark_as_sent error: {e}")
-        return self._mark_as_sent_fallback(job_url)
+            mapping = {
+                "title": title,
+                "company": company,
+                "location": location,
+                "score": str(score),
+                "sent_at": datetime.now(timezone.utc).isoformat(),
+                "metadata": json.dumps(metadata) if metadata else "",
+            }
+            # HSET + EXPIRE in a single pipeline round-trip
+            pipe = self.redis_client.pipeline()
+            pipe.hset(key, mapping=mapping)
+            pipe.expire(key, _REDIS_TTL)
+            pipe.execute()
+            return True
+        except Exception as e:
+            logger.error(f"❌ Redis mark_as_sent error: {e}")
 
     def _mark_as_sent_fallback(self, job_url: str) -> bool:
         try:
@@ -128,43 +127,43 @@ class JobDatabase:
 
     def get_sent_jobs(self, limit: int = 100) -> List[Dict]:
         """Return up to *limit* recently sent jobs (most recent first)."""
-        if self.redis_client is not None:
-            try:
-                keys = []
-                cursor = 0
-                while True:
-                    cursor, batch = self.redis_client.scan(
-                        cursor, match=f"{_SENT_PREFIX}*", count=500
+        if self.redis_client is None:
+            return self._get_sent_jobs_fallback(limit)
+        try:
+            keys = []
+            cursor = 0
+            while True:
+                cursor, batch = self.redis_client.scan(
+                    cursor, match=f"{_SENT_PREFIX}*", count=500
+                )
+                keys.extend(batch)
+                if cursor == 0:
+                    break
+
+            results = []
+            for key in keys:
+                data = self.redis_client.hgetall(key)
+                if data:
+                    job_url = key.decode().removeprefix(_SENT_PREFIX)
+                    results.append(
+                        {
+                            "job_url": job_url,
+                            "title": data.get(b"title", b"").decode(),
+                            "company": data.get(b"company", b"").decode(),
+                            "location": data.get(b"location", b"").decode(),
+                            "score": int(data.get(b"score", b"0").decode() or 0),
+                            "sent_at": data.get(b"sent_at", b"").decode(),
+                            "metadata": json.loads(data[b"metadata"].decode())
+                            if data.get(b"metadata")
+                            else None,
+                        }
                     )
-                    keys.extend(batch)
-                    if cursor == 0:
-                        break
 
-                results = []
-                for key in keys:
-                    data = self.redis_client.hgetall(key)
-                    if data:
-                        job_url = key.decode().removeprefix(_SENT_PREFIX)
-                        results.append(
-                            {
-                                "job_url": job_url,
-                                "title": data.get(b"title", b"").decode(),
-                                "company": data.get(b"company", b"").decode(),
-                                "location": data.get(b"location", b"").decode(),
-                                "score": int(data.get(b"score", b"0").decode() or 0),
-                                "sent_at": data.get(b"sent_at", b"").decode(),
-                                "metadata": json.loads(data[b"metadata"].decode())
-                                if data.get(b"metadata")
-                                else None,
-                            }
-                        )
-
-                results.sort(key=lambda j: j["sent_at"], reverse=True)
-                return results[:limit]
-            except Exception as e:
-                logger.error(f"❌ Redis get_sent_jobs error: {e}")
-                return []
-        return self._get_sent_jobs_fallback(limit)
+            results.sort(key=lambda j: j["sent_at"], reverse=True)
+            return results[:limit]
+        except Exception as e:
+            logger.error(f"❌ Redis get_sent_jobs error: {e}")
+            return []
 
     def _get_sent_jobs_fallback(self, limit: int) -> List[Dict]:
         try:
@@ -253,34 +252,3 @@ class JobDatabase:
             logger.info(f"🗑️ Cleaned up {deleted} old records (older than {days} days)")
         except Exception as e:
             logger.error(f"❌ Cleanup error: {e}")
-
-
-def main():
-    """Quick smoke-test of the database module."""
-    db = JobDatabase()
-
-    test_url = "https://example.com/job/12345"
-    test_job = {
-        "job_url": test_url,
-        "title": "Senior Engineer",
-        "company": "Tech Corp",
-        "location": "San Francisco, CA",
-        "score": 8,
-    }
-
-    print(f"\n1. Is job sent? {db.is_job_sent(test_url)}")
-    print("\n2. Marking as sent…")
-    db.mark_as_sent(**test_job)
-    print(f"\n3. Is job sent? {db.is_job_sent(test_url)}")
-    print("\n4. Recent sent jobs:")
-    for job in db.get_sent_jobs(limit=5):
-        print(f"   - {job.get('title', 'N/A')} at {job.get('company', 'N/A')}")
-
-    # Cleanup test keys
-    if db.redis_client:
-        db.redis_client.delete(f"{_SENT_PREFIX}{test_url}")
-        db.redis_client.delete(f"{_DEDUP_PREFIX}{test_url}")
-
-
-if __name__ == "__main__":
-    main()

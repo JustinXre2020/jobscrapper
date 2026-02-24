@@ -2,24 +2,21 @@
 Job Scraper Engine
 Aggregates job postings from multiple sources using python-jobspy
 """
-import os
 import time
 import random
 from loguru import logger
 from typing import List, Dict, Optional
 from jobspy import scrape_jobs
 import pandas as pd
-from dotenv import load_dotenv
 
-load_dotenv()
-
+from utils.config import settings
 
 
 class JobScraper:
     """Job scraper with retry logic and error handling"""
-    
+
     def __init__(self):
-        self.sites = [item.strip() for item in os.getenv("SITES", "indeed").split(",") if item.strip()]
+        self.sites = [s.strip() for s in settings.sites.split(",") if s.strip()]
         self.max_retries = 3
         self.base_delay = 2  # seconds
         
@@ -225,16 +222,12 @@ class JobScraper:
 def main():
     """Test the scraper"""
     scraper = JobScraper()
-    
-    # Load configuration
-    search_terms = os.getenv("SEARCH_TERMS", "software engineer").split(",")
-    locations = os.getenv("LOCATIONS", "San Francisco, CA").split(",")
-    results_wanted = int(os.getenv("RESULTS_WANTED", "20"))
-    hours_old = int(os.getenv("HOURS_OLD", "24"))
-    
-    # Clean up terms
-    search_terms = [term.strip() for term in search_terms]
-    locations = [loc.strip() for loc in locations]
+
+    # Load configuration from settings
+    search_terms = [t.strip() for t in settings.search_terms.split(",")]
+    locations = [loc.strip() for loc in settings.locations.split(",")]
+    results_wanted = settings.results_wanted
+    hours_old = settings.hours_old
     
     # Scrape
     jobs = scraper.scrape_multiple_queries(
