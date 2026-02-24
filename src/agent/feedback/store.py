@@ -9,10 +9,9 @@ Also provides a factory function to create the appropriate store
 
 import json
 from loguru import logger
-import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, List, Optional, Union
+from typing import List
 
 
 DEFAULT_FEEDBACK_PATH = Path("data/reviewer_feedback.jsonl")
@@ -92,35 +91,4 @@ class FeedbackStore:
         except OSError as e:
             logger.error(f"Could not write feedback file: {e}")
 
-
-def create_feedback_store(embedding_client=None) -> Union["FeedbackStore", Any]:
-    """Factory function to create the appropriate feedback store.
-
-    When USE_VECTOR_FEEDBACK=true and an embedding_client is provided,
-    returns a VectorFeedbackStore. Otherwise returns the JSONL-based FeedbackStore.
-
-    Args:
-        embedding_client: Optional EmbeddingClient for vector store.
-
-    Returns:
-        FeedbackStore or VectorFeedbackStore instance.
-    """
-    use_vector = os.getenv("USE_VECTOR_FEEDBACK", "false").lower() == "true"
-
-    if use_vector and embedding_client is not None:
-        try:
-            from agent.feedback.vector_store import VectorFeedbackStore
-
-            store = VectorFeedbackStore(embedding_client=embedding_client)
-            logger.info("Using Milvus vector feedback store")
-            return store
-        except ImportError:
-            logger.warning(
-                "pymilvus or sentence-transformers not installed, "
-                "falling back to JSONL feedback store"
-            )
-        except Exception as e:
-            logger.warning(f"Failed to initialize vector store: {e}, falling back to JSONL")
-
-    logger.info("Using JSONL feedback store")
-    return FeedbackStore()
+feedback_store = FeedbackStore()
