@@ -3,39 +3,29 @@ Job Hunter Sentinel - Main Orchestration Script
 Coordinates scraping, deduplication, and email dispatch
 Supports multi-recipient with per-recipient search terms and sponsorship filtering
 """
-import os
 import sys
 from datetime import datetime
 from typing import Dict, List
 
-from dotenv import load_dotenv
 from loguru import logger
 
-from infra.logging_config import configure_logging
-
-# Import custom modules
 from infra.scraper import JobScraper
 from storage.database import JobDatabase
 from notification.email_sender import EmailSender
 from storage.data_manager import DataManager
 
-from filtering.job_filter import OpenRouterLLMFilter
+from filtering.job_filter import LLMFilter
 
-from utils.config import parse_recipients, get_all_search_terms, mask_email, get_results_wanted, get_scrape_queries, DEFAULT_RESULTS_WANTED
-
-load_dotenv()
-
-
-def setup_logging() -> str:
-    """Configure logging to output to both console and file."""
-    return configure_logging(
-        log_file_prefix="job_hunter",
-        third_party_levels={
-            "llm_filter": "DEBUG",
-            "aiohttp": "WARNING",
-            "urllib3": "WARNING",
-        },
-    )
+from utils.config import (
+    settings,
+    parse_recipients,
+    get_all_search_terms,
+    mask_email,
+    get_results_wanted,
+    get_scrape_queries,
+    DEFAULT_RESULTS_WANTED,
+    setup_logging,
+)
 
 
 class JobHunterSentinel:
@@ -55,17 +45,10 @@ class JobHunterSentinel:
             self.recipients = parse_recipients()
             self.all_search_terms = get_all_search_terms(self.recipients)
 
-            # Configuration
-            self.locations = self._get_list_config("LOCATIONS", ["San Francisco, CA"])
-            self.hours_old = int(os.getenv("HOURS_OLD", "24"))
-            self.use_llm_filter = os.getenv("USE_LLM_FILTER", "true").lower() == "true"
-            self.llm_workers = int(os.getenv("LLM_WORKERS", "0"))  # 0 = auto-detect based on RAM
-
-            # Initialize LLM filter if enabled
-            self.llm_filter = None
-            if self.use_llm_filter:
-                logger.info("🤖 Initializing OpenRouter LLM Filter...")
-                self.llm_filter = OpenRouterLLMFilter()
+            # Configuration from centralised settings
+            self.locations = [loc.strip() for loc in settings.locations.split(",") if loc.strip()]
+            self.hours_old = settings.hours_old
+            self.llm_filter = LLMFilter()
 
             logger.info("✅ Configuration loaded:")
             logger.info(f"   Recipients: {len(self.recipients)}")
@@ -75,19 +58,10 @@ class JobHunterSentinel:
             logger.info(f"   Locations: {self.locations}")
             logger.info(f"   Results Wanted: per-term (default={DEFAULT_RESULTS_WANTED})")
             logger.info(f"   Time Window: {self.hours_old} hours")
-            logger.info(f"   LLM Filter: {'Enabled' if self.use_llm_filter else 'Disabled'}")
-            logger.info(f"   LLM Workers: {self.llm_workers if self.llm_workers > 0 else 'auto'}")
 
         except Exception as e:
             logger.exception(f"❌ Initialization failed: {e}")
             sys.exit(1)
-
-    def _get_list_config(self, key: str, default: List[str]) -> List[str]:
-        """Parse comma-separated config value"""
-        value = os.getenv(key)
-        if not value:
-            return default
-        return [item.strip() for item in value.split(",") if item.strip()]
 
     def run(self):
         """Execute the full job hunting workflow with sequential keyword processing"""
@@ -159,9 +133,9 @@ class JobHunterSentinel:
                 logger.info(f"\n🤖 STEP 3: LLM filtering for '{search_term}'...")
                 logger.info("-" * 60)
 
-                # Use parallel filtering (auto-detects workers based on RAM if llm_workers=0)
-                filtered_jobs = self.llm_filter.filter_jobs_parallel(
-                    new_jobs, [search_term], num_workers=self.llm_workers
+                # Use batch filtering
+                filtered_jobs = self.llm_filter.batch_filter_jobs(
+                    new_jobs, [search_term]
                 )
 
                 filtered_count = len(filtered_jobs)
@@ -262,11 +236,6 @@ class JobHunterSentinel:
         logger.info(f"📡 Jobs Scraped: {scraped}")
         logger.info(f"🔍 Jobs Filtered: {filtered}")
         logger.info(f"📧 Email Results: {successful_emails}/{total_recipients} successful")
-
-        if email_results:
-            for email, success in email_results.items():
-                status = "✅" if success else "❌"
-                logger.info(f"   {status} {email}")
 
         overall_status = 'SUCCESS' if filtered > 0 and successful_emails > 0 else 'NO NEW JOBS'
         logger.info(f"✅ Status: {overall_status}")

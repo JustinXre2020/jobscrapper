@@ -3,18 +3,14 @@ Email sender using Gmail SMTP
 Sends daily job digest with HTML formatting
 Supports multiple recipients with per-recipient job filtering
 """
-import os
 from loguru import logger
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from typing import List, Dict, Optional, Union
 from datetime import datetime
-from dotenv import load_dotenv
 
-from utils.config import Recipient, parse_recipients
-
-load_dotenv()
+from utils.config import settings, Recipient, parse_recipients
 
 
 
@@ -37,8 +33,8 @@ class EmailSender:
         """
         Initialize Gmail SMTP client with multi-recipient configuration
         """
-        self.gmail_email = os.getenv("GMAIL_EMAIL")
-        self.gmail_app_password = os.getenv("GMAIL_APP_PASSWORD")
+        self.gmail_email = settings.gmail_email
+        self.gmail_app_password = settings.gmail_app_password
 
         if not self.gmail_email or not self.gmail_app_password:
             raise ValueError(

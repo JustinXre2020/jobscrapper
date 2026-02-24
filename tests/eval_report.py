@@ -11,15 +11,16 @@ Usage:
 
 import asyncio
 import json
-from loguru import logger
-import os
 import sys
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, List
 
-# Ensure project root is importable
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from loguru import logger
+from langgraph.graph.state import CompiledStateGraph
+
+# Ensure src/ is on the path so project modules are importable
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from sklearn.metrics import (
     accuracy_score,
@@ -29,8 +30,14 @@ from sklearn.metrics import (
 )
 
 from agent import build_graph, run_single_job
-from infra.llm_client import LLMClient
+from infra.llm_client import create_llm_client
+from utils.config import settings
 
+_SUMMARIZER_PROVIDER = settings.summarizer_provider
+_SUMMARIZER_MODEL = settings.summarizer_model
+
+_ANALYZER_PROVIDER = settings.analyzer_provider
+_ANALYZER_MODEL = settings.analyzer_model
 
 EVAL_FIELDS = [
     "keyword_match",
@@ -41,10 +48,8 @@ EVAL_FIELDS = [
 ]
 
 DATA_PATH = Path(__file__).parent.parent / "data" / "evaluated_jobs.json"
-
 ALL_SEARCH_TERMS = ["software engineer", "data analyst", "data engineer", "product manager"]
-
-CONCURRENCY = 50
+CONCURRENCY = settings.agent_concurrency
 
 
 def _load_eval_data() -> List[Dict[str, Any]]:
@@ -167,14 +172,13 @@ async def _process_single_job(
 
 
 async def _run_all(
-    eval_data: List[Dict[str, Any]], llm_client: LLMClient
+    eval_data: List[Dict[str, Any]],
+    compiled_graph: CompiledStateGraph,
 ) -> List[Dict[str, Any]]:
     """Run all jobs via LangGraph in concurrent batches."""
     total = len(eval_data)
     completed = 0
     results: List[Dict[str, Any]] = []
-
-    compiled_graph = build_graph(llm_client)
 
     for batch_idx in range(0, total, CONCURRENCY):
         batch = eval_data[batch_idx : batch_idx + CONCURRENCY]
@@ -208,21 +212,21 @@ async def _run_all(
     return results
 
 
-async def run_eval(model_name: str) -> None:
+async def run_eval() -> None:
     """Run full evaluation and print report."""
-    api_key = os.getenv("OPENROUTER_API_KEY", "")
-    if not api_key:
-        print("ERROR: OPENROUTER_API_KEY not set")
-        sys.exit(1)
-
-    client = LLMClient(model=model_name, api_key=api_key)
     eval_data = _load_eval_data()
+    summarizer_client = create_llm_client(
+        provider=_SUMMARIZER_PROVIDER, model=_SUMMARIZER_MODEL
+    )
+    analyzer_client = create_llm_client(
+        provider=_ANALYZER_PROVIDER, model=_ANALYZER_MODEL
+    )
+    compiled_graph = build_graph(summarizer_client, analyzer_client)
 
-    print(f"\nModel: {model_name}")
     print(f"Jobs: {len(eval_data)}")
     print("-" * 60)
 
-    results = await _run_all(eval_data, client)
+    results = await _run_all(eval_data, compiled_graph)
 
     # Separate successful from errored
     errors = [r for r in results if r["prediction"].get("error")]
@@ -242,7 +246,7 @@ async def run_eval(model_name: str) -> None:
 
     # Print per-field metrics
     print(f"\n{'=' * 70}")
-    print(f"CLASSIFICATION REPORT — {model_name}")
+    print(f"CLASSIFICATION REPORT — {_SUMMARIZER_MODEL} - {_ANALYZER_MODEL}")
     print(f"{'=' * 70}")
     print(
         f"{'Field':<20s} {'Acc':>6s} {'Prec':>6s} {'Rec':>6s} "
@@ -317,8 +321,7 @@ async def run_eval(model_name: str) -> None:
 
 
 def main():
-    model = os.getenv("OPENROUTER_MODEL", "")
-    asyncio.run(run_eval(model))
+    asyncio.run(run_eval())
 
 
 
