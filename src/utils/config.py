@@ -76,9 +76,9 @@ class Settings(BaseSettings):
     local_llm_api_key: str = "local"
     local_llm_model: str = "liquid/lfm-2.5-1.2b-thinking"
 
-    # --- Redis IP Address and ports ------------------------------------------
-    REDIS_HOST: str = None
-    REDIS_PORT: int = None
+    # --- Redis ---------------------------------------------------------------
+    redis_host: Optional[str] = None
+    redis_port: Optional[int] = None
 
     # --- Per-node model routing ----------------------------------------------
     summarizer_provider: str = "local"
