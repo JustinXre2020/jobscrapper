@@ -4,7 +4,7 @@ This file provides guidance for GitHub Copilot when working with this codebase.
 
 ## Project Overview
 
-Job Hunter Sentinel — an automated job scraping and recommendation system for O-1 visa applicants. Scrapes jobs from multiple boards, filters them with an LLM-based agent pipeline using LangGraph + Reflexion architecture, and emails matched jobs to recipients. Runs on GitHub Actions twice daily (6 AM & 1 PM EST).
+Job Hunter Sentinel — an automated job scraping and recommendation system for O-1 visa applicants. Scrapes jobs from multiple boards, filters them with an LLM-based agent pipeline using LangGraph + Reflexion architecture, and emails matched jobs to recipients. Runs on GitHub Actions once per weekday (1 PM EST), skipping US federal holidays.
 
 ## Build, Test, and Lint Commands
 
@@ -67,14 +67,13 @@ Orchestrated in `src/main.py`:
 
 **Per-job graph** (`src/agent/graph.py`):
 ```
-[Summarizer] → [Analyzer x3 in parallel] → [Majority Vote + deterministic overrides] → END
+[SummarizerNode] → [AnalyzerNode (x3 in parallel)] → [Majority Vote + deterministic overrides] → END
 ```
 
-- **Summarizer** (`src/agent/nodes/summarizer.py`): Extracts structured job metadata via LLM (`SUMMARIZER_PROVIDER` / `SUMMARIZER_MODEL`)
-- **Analyzer** (`src/agent/nodes/analyzer.py`): Runs LLM evaluation with deterministic override rules (`ANALYZER_PROVIDER` / `ANALYZER_MODEL`)
-- **Graph Voting** (`src/agent/graph.py`): Executes 3 analyzer calls and computes majority decision
-- Deterministic overrides are applied for explicit signals like sponsorship, internship, and PhD requirements
-- Each node holds its own `BaseLLMClient` instance — swap providers without touching graph logic
+- **SummarizerNode** (`src/agent/nodes/summarizer.py`): Extracts structured job metadata via LLM (`SUMMARIZER_PROVIDER` / `SUMMARIZER_MODEL`). Passed directly to `graph.add_node()` — no wrapper closure.
+- **AnalyzerNode** (`src/agent/nodes/analyzer.py`): Runs 3 parallel LLM calls internally via `asyncio.gather`, applies majority vote across `BOOLEAN_FIELDS`, then applies deterministic overrides. Passed directly to `graph.add_node()` — no wrapper closure.
+- Each node extends `BaseNode` and holds its own `BaseLLMClient` instance — swap providers without touching graph logic.
+- Constants `BOOLEAN_FIELDS` and `ANALYZER_TEMPERATURES` live in `analyzer.py`; helpers `_majority_vote_evaluation` and `_pick_closest_reason` also live there.
 
 ### Feedback Stores
 - **JSONL** (default): Chronological, last 20 entries (`src/agent/feedback/store.py`)
@@ -138,6 +137,13 @@ tests/
 └── fixtures/           — Test job data
 ```
 
+### Configuration (pydantic-settings)
+All environment variables are centralised in `src/utils/config.py` as a `Settings(BaseSettings)` class.
+- Import the singleton: `from utils.config import settings`
+- **Never** call `os.getenv()` directly anywhere in the codebase
+- `.env` path is resolved absolutely from `config.py`'s location (works regardless of cwd)
+- Fields use `lower_case`; env vars use `UPPER_CASE` — pydantic-settings maps them automatically
+
 ### Async Throughout
 - All LLM interactions use `asyncio` and `AsyncOpenAI`
 - Parallel job processing controlled by `AGENT_CONCURRENCY` (default 5)
@@ -163,7 +169,17 @@ In `src/agent/nodes/analyzer.py`, certain fields have deterministic logic that o
 
 ## Critical Environment Variables
 
-See `.env.example` for full list. Key ones:
+All env vars are loaded via **pydantic-settings** (`Settings` class in `src/utils/config.py`).
+Never call `os.getenv()` directly — read from the `settings` singleton instead:
+
+```python
+from utils.config import settings
+print(settings.hours_old)  # typed int
+```
+
+The `.env` file path is anchored absolutely to `config.py`'s location, so it is found regardless of the working directory.
+
+See `.env.example` for the full list. Key ones:
 
 **Email Configuration:**
 - `GMAIL_EMAIL` / `GMAIL_APP_PASSWORD` — sender credentials (App Password, not account password)
@@ -187,11 +203,15 @@ See `.env.example` for full list. Key ones:
 **Agent Tuning:**
 - `LLM_WORKERS` — parallel worker count (`0` = auto)
 - `USE_VECTOR_FEEDBACK` — enable optional vector feedback initialization
-- `AGENT_CONCURRENCY` — parallel job processing limit (default 5)
+- `AGENT_CONCURRENCY` — parallel job processing limit (default 50)
 
 **Scraping:**
 - `SEARCH_TERMS`, `LOCATIONS`, `HOURS_OLD`, `SITES`, `RESULTS_WANTED` — scraping parameters
 - `DATABASE_URL` — SQLite path or PostgreSQL/Supabase URI
+
+**Redis:**
+- `REDIS_HOST` — Redis server hostname/IP (stored as GitHub secret)
+- `REDIS_PORT` — Redis server port (stored as GitHub secret)
 
 ## Code Style
 
