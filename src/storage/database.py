@@ -48,11 +48,11 @@ class JobDatabase:
 
     def _init_redis(self):
         """Return a connected Redis client, or None if REDIS_PORT is unset."""
-        redis_host = settings.REDIS_HOST
+        redis_host = settings.redis_host
         if not redis_host:
             return None
         try:
-            redis_port = settings.REDIS_PORT
+            redis_port = settings.redis_port
             client = redis_lib.Redis(host=redis_host, port=int(redis_port), socket_timeout=3)
             client.ping()
             logger.info(f"✅ Redis initialized: {redis_host}:{redis_port}")

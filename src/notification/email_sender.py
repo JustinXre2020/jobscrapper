@@ -148,7 +148,7 @@ class EmailSender:
         title = safe_str(job.get('title'), 'Unknown Position')
         company = safe_str(job.get('company'), 'Unknown Company')
         location = safe_str(job.get('location'), 'Unknown Location')
-        job_url = safe_str(job.get('job_url'), '#')
+        job_url = safe_str(job.get('job_url_direct'), '#')
         site = safe_str(job.get('site'), 'Unknown')
 
         # Get visa sponsorship status for badge
