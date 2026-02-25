@@ -78,9 +78,8 @@ class LLMFilter:
                 return {
                     "keyword_match": False,
                     "visa_sponsorship": False,
-                    "entry_level": False,
+                    "job_level": "entry",
                     "requires_phd": False,
-                    "is_internship": False,
                     "reason": "No description available - skipped",
                     "skipped": True,
                     "job_title": job_title,
@@ -93,9 +92,8 @@ class LLMFilter:
                     return {
                         "keyword_match": False,
                         "visa_sponsorship": False,
-                        "entry_level": False,
+                        "job_level": "senior",  # Conservative: filter out when rate-limited
                         "requires_phd": True,
-                        "is_internship": True,
                         "reason": "Rate limited (429) - filtered out",
                         "error": True,
                         "rate_limited": True,
@@ -105,9 +103,8 @@ class LLMFilter:
                 return {
                     "keyword_match": True,
                     "visa_sponsorship": True,
-                    "entry_level": True,
+                    "job_level": "entry",
                     "requires_phd": False,
-                    "is_internship": False,
                     "reason": f"API error: {error_msg[:50]}",
                     "error": True,
                     "job_title": job_title,
@@ -124,9 +121,8 @@ class LLMFilter:
             return {
                 "keyword_match": True,
                 "visa_sponsorship": True,
-                "entry_level": True,
+                "job_level": "entry",
                 "requires_phd": False,
-                "is_internship": False,
                 "reason": f"Error: {str(e)[:50]}",
                 "error": True,
                 "job_title": job_title,
@@ -178,9 +174,7 @@ class LLMFilter:
         """Extract filtered jobs from (job, evaluation) pairs."""
         filtered = []
         excluded_keyword = 0
-        excluded_experience = 0
         excluded_phd = 0
-        excluded_internship = 0
         skipped = 0
         error = 0
         no_visa_count = 0
@@ -201,18 +195,11 @@ class LLMFilter:
             if not evaluation.get("visa_sponsorship", False):
                 no_visa_count += 1
 
-            if not evaluation.get("entry_level", False):
-                excluded_experience += 1
-                continue
-
             if evaluation.get("requires_phd", False):
                 excluded_phd += 1
                 continue
 
-            if evaluation.get("is_internship", False):
-                excluded_internship += 1
-                continue
-
+            # job_level filtering is handled per-recipient in email_sender
             job["llm_evaluation"] = evaluation
             filtered.append(job)
 
@@ -221,9 +208,7 @@ class LLMFilter:
                 error,
                 skipped,
                 excluded_keyword,
-                excluded_experience,
                 excluded_phd,
-                excluded_internship,
                 no_visa_count,
                 len(filtered),
             )
@@ -232,17 +217,15 @@ class LLMFilter:
 
     @staticmethod
     def _log_filter_stats(
-        error, skipped, excluded_keyword, excluded_experience,
-        excluded_phd, excluded_internship, no_visa_count, filtered_count,
+        error, skipped, excluded_keyword,
+        excluded_phd, no_visa_count, filtered_count,
     ):
-        logger.info(f"   Skipped {error} errored jobs (error calling OpenRouter)")
+        logger.info(f"   Skipped {error} errored jobs (error calling LLM)")
         logger.info(f"   Skipped {skipped} jobs (no description)")
         logger.info(f"   Excluded {excluded_keyword} jobs (keyword mismatch)")
-        logger.info(f"   Excluded {excluded_experience} jobs (not entry-level)")
         logger.info(f"   Excluded {excluded_phd} jobs (PhD required)")
-        logger.info(f"   Excluded {excluded_internship} jobs (internship)")
-        logger.info(f"   Tracked {no_visa_count} jobs without visa sponsorship (not filtered)")
-        logger.info(f"   {filtered_count} jobs passed agent workflow filter")
+        logger.info(f"   Tracked {no_visa_count} jobs without visa sponsorship (not filtered here)")
+        logger.info(f"   {filtered_count} jobs queued for per-recipient level filtering")
 
     def batch_filter_jobs(
         self,

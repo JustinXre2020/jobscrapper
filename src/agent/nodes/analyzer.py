@@ -23,19 +23,27 @@ from utils.config import settings
 BOOLEAN_FIELDS = [
     "keyword_match",
     "visa_sponsorship",
-    "entry_level",
     "requires_phd",
-    "is_internship",
 ]
+
+# Categorical field handled separately with most-common-value voting
+CATEGORICAL_FIELDS = ["job_level"]
+
+# Valid job_level values (ordered from most junior to most senior)
+JOB_LEVELS = ["internship", "entry", "junior", "mid", "senior"]
 
 
 def _deterministic_eval(
     summary: Dict[str, Any], search_terms: list[str]
-) -> Dict[str, Optional[bool]]:
-    """Rule-based evaluation for unambiguous cases. Returns None for fields needing LLM."""
-    result: Dict[str, Optional[bool]] = {}
+) -> Dict[str, Any]:
+    """Rule-based evaluation for unambiguous cases.
 
-    # visa_sponsorship: empty -> True, explicit denial phrases -> False
+    Returns a dict of field → value. A value of ``None`` means the field
+    is ambiguous and should be left to the LLM ensemble to decide.
+    """
+    result: Dict[str, Any] = {}
+
+    # visa_sponsorship: empty → True, explicit denial phrases → False
     visa = summary.get("visa_statements", [])
     if not visa:
         result["visa_sponsorship"] = True
@@ -50,30 +58,41 @@ def _deterministic_eval(
         )
         result["visa_sponsorship"] = not has_denial
 
-    # is_internship: directly from summary + title keywords
-    is_intern = summary.get("is_internship_coop", False)
-    title = (summary.get("title_normalized") or "").lower()
-    intern_words = ["intern", "internship", "co-op", "fellowship", "apprenticeship"]
-    result["is_internship"] = is_intern or any(w in title for w in intern_words)
-
     # requires_phd: directly from education field
     result["requires_phd"] = summary.get("education_required") == "phd"
 
-    # entry_level: deterministic for clear cases
-    years = summary.get("years_experience_required")
-    seniority = summary.get("seniority_level", "unknown")
-    senior_levels = {"mid", "senior", "lead", "staff", "principal", "director", "vp"}
-    if seniority in senior_levels:
-        result["entry_level"] = False
-    elif isinstance(years, (int, float)) and years >= 2:
-        result["entry_level"] = False
-    elif seniority in ("entry", "intern") and (years is None or years <= 1):
-        result["entry_level"] = True
-    else:
-        result["entry_level"] = None  # ambiguous — let LLM decide
-
-    # keyword_match: requires semantic judgment, leave to LLM
+    # keyword_match: requires semantic judgment — leave to LLM
     result["keyword_match"] = None
+
+    # job_level: determined from internship flag, seniority, and years experience
+    is_intern = summary.get("is_internship_coop", False)
+    title = (summary.get("title_normalized") or "").lower()
+    intern_words = ["intern", "internship", "co-op", "fellowship", "apprenticeship"]
+    if is_intern or any(w in title for w in intern_words):
+        result["job_level"] = "internship"
+        return result
+
+    seniority = (summary.get("seniority_level") or "unknown").lower()
+    years = summary.get("years_experience_required")  # int | None
+
+    senior_explicit = {"senior", "lead", "staff", "principal", "director", "vp"}
+    if seniority in senior_explicit:
+        result["job_level"] = "senior"
+    elif seniority == "mid":
+        result["job_level"] = "mid"
+    elif isinstance(years, (int, float)):
+        if years >= 5:
+            result["job_level"] = "senior"
+        elif years >= 3:
+            result["job_level"] = "mid"
+        elif years >= 1:
+            result["job_level"] = "junior"
+        else:
+            result["job_level"] = "entry"
+    elif seniority in ("entry", "junior"):
+        result["job_level"] = "entry" if seniority == "entry" else "junior"
+    else:
+        result["job_level"] = None  # ambiguous — let LLM decide
 
     return result
 
@@ -86,12 +105,14 @@ def _parse_text_fallback(response_text: str) -> Dict[str, Any]:
     try:
         repaired = repair_json(response_text)
         result = json.loads(repaired)
+        # Validate job_level; default to "entry" (permissive) if missing/invalid
+        raw_level = result.get("job_level", "entry")
+        job_level = raw_level if raw_level in JOB_LEVELS else "entry"
         return {
             "keyword_match": result.get("keyword_match", True),
             "visa_sponsorship": result.get("visa_sponsorship", True),
-            "entry_level": result.get("entry_level", True),
+            "job_level": job_level,
             "requires_phd": result.get("requires_phd", False),
-            "is_internship": result.get("is_internship", False),
             "reason": result.get("reason", ""),
         }
     except (json.JSONDecodeError, ValueError):
@@ -101,9 +122,8 @@ def _parse_text_fallback(response_text: str) -> Dict[str, Any]:
     return {
         "keyword_match": True,
         "visa_sponsorship": True,
-        "entry_level": True,
+        "job_level": "entry",
         "requires_phd": False,
-        "is_internship": False,
         "reason": "JSON parse error - defaulting to pass",
     }
 
@@ -117,12 +137,31 @@ def _build_analyzer_client() -> BaseLLMClient:
 
 
 def _majority_vote_evaluation(results: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Return a consensus evaluation dict by majority vote over boolean fields."""
+    """Return a consensus evaluation dict by majority vote.
+
+    Boolean fields use simple majority vote.
+    Categorical fields (job_level) use most-common-value vote.
+    """
     evaluation: Dict[str, Any] = {}
     total = len(results)
+
+    # Boolean majority vote
     for field in BOOLEAN_FIELDS:
         true_votes = sum(1 for r in results if bool(r.get(field, False)))
         evaluation[field] = true_votes > (total / 2)
+
+    # Categorical majority vote for job_level
+    level_votes: Dict[str, int] = {}
+    for r in results:
+        level = r.get("job_level", "entry")
+        if level in JOB_LEVELS:
+            level_votes[level] = level_votes.get(level, 0) + 1
+    # Pick the most common; tie-break by picking the more junior level (earlier in JOB_LEVELS)
+    evaluation["job_level"] = max(
+        level_votes or {"entry": 1},
+        key=lambda lvl: (level_votes.get(lvl, 0), -JOB_LEVELS.index(lvl)),
+    )
+
     return evaluation
 
 
@@ -251,9 +290,8 @@ class AnalyzerNode(BaseNode):
                 f"EVALUATED [{job_context}]: "
                 f"keyword={evaluation.get('keyword_match')}, "
                 f"visa={evaluation.get('visa_sponsorship')}, "
-                f"entry={evaluation.get('entry_level')}, "
-                f"phd={evaluation.get('requires_phd')}, "
-                f"intern={evaluation.get('is_internship')}"
+                f"job_level={evaluation.get('job_level')}, "
+                f"phd={evaluation.get('requires_phd')}"
             )
             return {"evaluation": evaluation}
 
@@ -264,9 +302,8 @@ class AnalyzerNode(BaseNode):
                     "evaluation": {
                         "keyword_match": False,
                         "visa_sponsorship": False,
-                        "entry_level": False,
+                        "job_level": "senior",  # Conservative: filter out when rate-limited
                         "requires_phd": True,
-                        "is_internship": True,
                         "reason": "Rate limited (429) - filtered out",
                         "error": True,
                         "rate_limited": True,

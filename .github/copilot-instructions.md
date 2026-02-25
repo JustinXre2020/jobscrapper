@@ -37,7 +37,7 @@ PYTHONPATH=src pytest tests/test_summarizer.py -v
 # Only tests hitting real APIs (requires OPENROUTER_API_KEY)
 PYTHONPATH=src pytest -m live
 
-# Run with specific model
+# Run with specific model(s) — comma-separated; defaults to liquid/lfm-2.5-1.2b-instruct:free and qwen/qwen3-30b-a3b:free
 TEST_MODELS="liquid/lfm-2.5-1.2b-instruct:free" PYTHONPATH=src pytest tests/
 ```
 
@@ -73,7 +73,8 @@ Orchestrated in `src/main.py`:
 - **SummarizerNode** (`src/agent/nodes/summarizer.py`): Extracts structured job metadata via LLM (`SUMMARIZER_PROVIDER` / `SUMMARIZER_MODEL`). Passed directly to `graph.add_node()` — no wrapper closure.
 - **AnalyzerNode** (`src/agent/nodes/analyzer.py`): Runs 3 parallel LLM calls internally via `asyncio.gather`, applies majority vote across `BOOLEAN_FIELDS`, then applies deterministic overrides. Passed directly to `graph.add_node()` — no wrapper closure.
 - Each node extends `BaseNode` and holds its own `BaseLLMClient` instance — swap providers without touching graph logic.
-- Constants `BOOLEAN_FIELDS` and `ANALYZER_TEMPERATURES` live in `analyzer.py`; helpers `_majority_vote_evaluation` and `_pick_closest_reason` also live there.
+- `BOOLEAN_FIELDS = ["keyword_match", "visa_sponsorship", "entry_level", "requires_phd", "is_internship"]` and helpers `_majority_vote_evaluation`, `_pick_closest_reason` live in `analyzer.py`.
+- Before the LLM ensemble, `_deterministic_eval()` runs rule-based logic and returns `None` for fields that need LLM judgment; non-None values override the ensemble result.
 
 ### Feedback Stores
 - **JSONL** (default): Chronological, last 20 entries (`src/agent/feedback/store.py`)
@@ -146,7 +147,7 @@ All environment variables are centralised in `src/utils/config.py` as a `Setting
 
 ### Async Throughout
 - All LLM interactions use `asyncio` and `AsyncOpenAI`
-- Parallel job processing controlled by `AGENT_CONCURRENCY` (default 5)
+- Parallel job processing controlled by `AGENT_CONCURRENCY` (default 50)
 - Rate limiting with exponential backoff for 429s (2s → 4s → 8s)
 
 ### Structured Output
@@ -155,17 +156,18 @@ All environment variables are centralised in `src/utils/config.py` as a `Setting
 - Models defined in `src/infra/models.py`: `JobSummary`, `JobEvaluation`, `ReviewResult`, etc.
 
 ### Deterministic Overrides
-In `src/agent/nodes/analyzer.py`, certain fields have deterministic logic that overrides LLM output:
-- `requires_sponsorship`: "US work authorization required" → True
-- `internship`: Job title contains "intern" → True
-- `requires_phd`: Job description mentions PhD requirement → True
-- `seniority_level`: Clear indicators (e.g., "Senior", "Principal", "Staff") → override LLM
+`_deterministic_eval()` in `src/agent/nodes/analyzer.py` runs before the LLM ensemble and returns `None` for fields requiring semantic judgment. Non-None values always override the majority vote:
+- `visa_sponsorship`: empty `visa_statements` → `True`; denial phrases (e.g. "must be", "no visa", "without sponsorship", "us citizen") → `False`
+- `is_internship`: `True` if summary's `is_internship_coop` is set, or title contains `intern`, `co-op`, `fellowship`, or `apprenticeship`
+- `requires_phd`: `True` if summary's `education_required == "phd"`
+- `entry_level`: `False` if `seniority_level` is `mid/senior/lead/staff/principal/director/vp`, or `years_experience_required >= 2`; `True` if seniority is `entry`/`intern` with ≤1 year; otherwise `None` (left to LLM)
+- `keyword_match`: always `None` — requires semantic judgment, never deterministic
 
 ### Testing with Markers
 - Use `@pytest.mark.live` for tests hitting real APIs
 - These tests require `OPENROUTER_API_KEY` in environment
-- Default test model: `liquid/lfm-2.5-1.2b-instruct:free`
-- Override via `TEST_MODELS` environment variable
+- Default test models: `liquid/lfm-2.5-1.2b-instruct:free`, `qwen/qwen3-30b-a3b:free`
+- Override via `TEST_MODELS` environment variable (comma-separated)
 
 ## Critical Environment Variables
 
@@ -215,7 +217,7 @@ See `.env.example` for the full list. Key ones:
 
 ## Code Style
 
-- Python 3.10+, line length 100
+- Python 3.13+, line length 100
 - Ruff rules: E, F, I, N, W (E501 ignored for long lines)
 - Black: line-length=100, target py310/py311
 - All async code uses `asyncio`

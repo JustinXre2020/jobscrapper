@@ -10,8 +10,7 @@ from typing import Any, Dict, List, Optional, TypedDict
 class EvalExpected(TypedDict, total=False):
     keyword_match: bool
     visa_sponsorship: bool
-    entry_level: bool
-    is_internship: bool
+    job_level: str
     requires_phd: bool
 
 
@@ -41,8 +40,7 @@ ENTRY_0_YEARS: EvalFixture = {
     "expected": {
         "keyword_match": True,
         "visa_sponsorship": True,
-        "entry_level": True,
-        "is_internship": False,
+        "job_level": "entry",
         "requires_phd": False,
     },
 }
@@ -64,8 +62,7 @@ ENTRY_1_YEAR: EvalFixture = {
     "expected": {
         "keyword_match": True,
         "visa_sponsorship": True,
-        "entry_level": True,
-        "is_internship": False,
+        "job_level": "entry",
         "requires_phd": False,
     },
 }
@@ -87,8 +84,7 @@ MID_3_YEARS: EvalFixture = {
     "expected": {
         "keyword_match": True,
         "visa_sponsorship": True,
-        "entry_level": False,
-        "is_internship": False,
+        "job_level": "mid",
         "requires_phd": False,
     },
 }
@@ -110,8 +106,7 @@ SENIOR_NULL_YEARS: EvalFixture = {
     "expected": {
         "keyword_match": True,
         "visa_sponsorship": True,
-        "entry_level": False,
-        "is_internship": False,
+        "job_level": "senior",
         "requires_phd": False,
     },
 }
@@ -133,8 +128,7 @@ PRINCIPAL_NULL_YEARS: EvalFixture = {
     "expected": {
         "keyword_match": True,
         "visa_sponsorship": True,
-        "entry_level": False,
-        "is_internship": False,
+        "job_level": "senior",
         "requires_phd": False,
     },
 }
@@ -158,8 +152,7 @@ VISA_EMPTY: EvalFixture = {
     "expected": {
         "keyword_match": True,
         "visa_sponsorship": True,
-        "entry_level": True,
-        "is_internship": False,
+        "job_level": "entry",
         "requires_phd": False,
     },
 }
@@ -181,8 +174,7 @@ VISA_EXPLICIT_DENIAL: EvalFixture = {
     "expected": {
         "keyword_match": True,
         "visa_sponsorship": False,
-        "entry_level": False,
-        "is_internship": False,
+        "job_level": "mid",
         "requires_phd": False,
     },
 }
@@ -204,8 +196,7 @@ VISA_US_PERSON: EvalFixture = {
     "expected": {
         "keyword_match": True,
         "visa_sponsorship": False,
-        "entry_level": False,
-        "is_internship": False,
+        "job_level": "mid",
         "requires_phd": False,
     },
 }
@@ -227,8 +218,7 @@ VISA_SPONSORSHIP_AVAILABLE: EvalFixture = {
     "expected": {
         "keyword_match": True,
         "visa_sponsorship": True,
-        "entry_level": False,
-        "is_internship": False,
+        "job_level": "mid",
         "requires_phd": False,
     },
 }
@@ -252,8 +242,7 @@ INTERNSHIP_TITLE: EvalFixture = {
     "expected": {
         "keyword_match": True,
         "visa_sponsorship": True,
-        "entry_level": True,
-        "is_internship": True,
+        "job_level": "internship",
         "requires_phd": False,
     },
 }
@@ -275,8 +264,7 @@ NOT_INTERNSHIP: EvalFixture = {
     "expected": {
         "keyword_match": True,
         "visa_sponsorship": True,
-        "entry_level": True,
-        "is_internship": False,
+        "job_level": "entry",
         "requires_phd": False,
     },
 }
@@ -300,8 +288,7 @@ PHD_REQUIRED: EvalFixture = {
     "expected": {
         "keyword_match": True,
         "visa_sponsorship": True,
-        "entry_level": False,
-        "is_internship": False,
+        "job_level": "mid",
         "requires_phd": True,
     },
 }
@@ -323,8 +310,7 @@ PHD_NOT_REQUIRED: EvalFixture = {
     "expected": {
         "keyword_match": True,
         "visa_sponsorship": True,
-        "entry_level": False,
-        "is_internship": False,
+        "job_level": "mid",
         "requires_phd": False,
     },
 }
@@ -348,8 +334,7 @@ KEYWORD_MISMATCH: EvalFixture = {
     "expected": {
         "keyword_match": False,
         "visa_sponsorship": True,
-        "entry_level": False,
-        "is_internship": False,
+        "job_level": "mid",
         "requires_phd": False,
     },
 }
@@ -371,8 +356,7 @@ KEYWORD_MATCH_DIFFERENT_SENIORITY: EvalFixture = {
     "expected": {
         "keyword_match": True,
         "visa_sponsorship": True,
-        "entry_level": False,
-        "is_internship": False,
+        "job_level": "senior",
         "requires_phd": False,
     },
 }
@@ -398,8 +382,7 @@ ENTRY_WITH_VISA_DENIAL: EvalFixture = {
     "expected": {
         "keyword_match": True,
         "visa_sponsorship": False,
-        "entry_level": True,
-        "is_internship": False,
+        "job_level": "entry",
         "requires_phd": False,
     },
 }
@@ -421,8 +404,7 @@ COOP_TITLE: EvalFixture = {
     "expected": {
         "keyword_match": True,
         "visa_sponsorship": True,
-        "entry_level": True,
-        "is_internship": True,
+        "job_level": "internship",
         "requires_phd": False,
     },
 }
@@ -444,8 +426,7 @@ LEAD_WITH_2_YEARS: EvalFixture = {
     "expected": {
         "keyword_match": True,
         "visa_sponsorship": True,
-        "entry_level": False,
-        "is_internship": False,
+        "job_level": "senior",
         "requires_phd": False,
     },
 }
@@ -467,8 +448,7 @@ DIRECTOR_ROLE: EvalFixture = {
     "expected": {
         "keyword_match": False,
         "visa_sponsorship": True,
-        "entry_level": False,
-        "is_internship": False,
+        "job_level": "senior",
         "requires_phd": False,
     },
 }
@@ -490,9 +470,8 @@ UNKNOWN_SENIORITY_1_YEAR: EvalFixture = {
     "expected": {
         "keyword_match": True,
         "visa_sponsorship": True,
-        # Ambiguous: unknown seniority + 1yr -> LLM decides, but lean True
-        "entry_level": True,
-        "is_internship": False,
+        # unknown seniority + 1yr → entry (0-1 yrs AND seniority unknown qualifies as entry)
+        "job_level": "entry",
         "requires_phd": False,
     },
 }

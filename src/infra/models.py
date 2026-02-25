@@ -1,6 +1,6 @@
 """Shared Pydantic schemas used across agent nodes."""
 
-from typing import List, Optional
+from typing import List, Literal, Optional
 from pydantic import BaseModel, Field
 
 
@@ -55,24 +55,21 @@ class JobEvaluation(BaseModel):
             "'no visa sponsorship', 'must be US citizen', or 'authorized without sponsorship'."
         )
     )
-    entry_level: bool = Field(
+    job_level: Literal["internship", "entry", "junior", "mid", "senior"] = Field(
         description=(
-            "True if years_experience_required is 0, 1, or null AND seniority_level is "
-            "'entry' or 'intern'. False if years >= 2 or seniority is mid/senior/lead/staff "
-            "or higher."
+            "Seniority/experience level of the role. "
+            "'internship': intern, co-op, fellowship, or apprenticeship. "
+            "'entry': 0-1 yrs experience required. "
+            "'junior': 1-3 yrs experience required. "
+            "'mid': 3-5 yrs experience required. "
+            "'senior': 5+ yrs experience required."
         )
     )
     requires_phd: bool = Field(
         description="True only if education_required is 'phd' as a mandatory requirement."
     )
-    is_internship: bool = Field(
-        description=(
-            "True if is_internship_coop is true in the summary or the title contains "
-            "'Intern', 'Internship', 'Co-op', 'Fellowship', or 'Apprenticeship'."
-        )
-    )
     reason: str = Field(
-        description="Concise breakdown citing structured summary fields for each boolean."
+        description="Concise breakdown citing structured summary fields for each field."
     )
 
 
