@@ -22,8 +22,7 @@ class ExpectedSummary(TypedDict, total=False):
 class ExpectedEvaluation(TypedDict, total=False):
     keyword_match: bool
     visa_sponsorship: bool
-    entry_level: bool
-    is_internship: bool
+    job_level: str
     requires_phd: bool
 
 
@@ -70,14 +69,10 @@ SENIOR_EMBEDDED_ENGINEER: JobFixture = {
     "expected_evaluation": {
         "keyword_match": True,
         "visa_sponsorship": False,
-        "entry_level": False,
-        "is_internship": False,
+        "job_level": "senior",
         "requires_phd": False,
     },
 }
-
-
-# --- Fixture 2: Internship ---
 
 SAP_INTERN: JobFixture = {
     "job": {
@@ -113,8 +108,7 @@ SAP_INTERN: JobFixture = {
     "expected_evaluation": {
         "keyword_match": False,
         "visa_sponsorship": False,
-        "entry_level": True,
-        "is_internship": True,
+        "job_level": "internship",
         "requires_phd": False,
     },
 }
@@ -156,8 +150,7 @@ RESEARCH_DEVOPS_ENGINEER: JobFixture = {
     "expected_evaluation": {
         "keyword_match": True,
         "visa_sponsorship": False,
-        "entry_level": False,
-        "is_internship": False,
+        "job_level": "mid",
         "requires_phd": False,
     },
 }
@@ -196,8 +189,7 @@ JUNIOR_SOFTWARE_ENGINEER: JobFixture = {
     "expected_evaluation": {
         "keyword_match": True,
         "visa_sponsorship": True,
-        "entry_level": True,
-        "is_internship": False,
+        "job_level": "entry",
         "requires_phd": False,
     },
 }

@@ -28,8 +28,7 @@ from infra.llm_client import LLMClient
 EVAL_FIELDS = [
     "keyword_match",
     "visa_sponsorship",
-    "entry_level",
-    "is_internship",
+    "job_level",
     "requires_phd",
 ]
 
@@ -44,14 +43,16 @@ CONCURRENCY = 5
 
 def _load_eval_data() -> List[Dict[str, Any]]:
     """Load evaluated jobs, returning list of (job_without_eval, ground_truth) tuples."""
-    with open(DATA_PATH) as f:
+    with open(DATA_PATH, encoding="utf-8") as f:
         data = json.load(f)
 
     results = []
     for job in data["jobs"]:
         job_copy = deepcopy(job)
         ground_truth = job_copy.pop("evaluation", {})
-        results.append({"job": job_copy, "ground_truth": ground_truth})
+        # search_terms stored on the job record after migration
+        search_terms = job_copy.get("search_terms", [])
+        results.append({"job": job_copy, "ground_truth": ground_truth, "search_terms": search_terms})
     return results
 
 
@@ -121,7 +122,8 @@ async def _run_all(
         async with semaphore:
             job = item["job"]
             title = job.get("title", "")
-            search_terms = _infer_search_terms(title)
+            # Use pre-stored search_terms from the eval dataset; fall back to inference
+            search_terms = item.get("search_terms") or _infer_search_terms(title)
             try:
                 prediction = await _run_pipeline(job, search_terms, llm_client)
             except Exception as e:
@@ -138,11 +140,15 @@ async def _run_all(
     return list(results)
 
 
+BOOL_FIELDS = {"keyword_match", "visa_sponsorship", "requires_phd"}
+CATEGORICAL_FIELDS = {"job_level"}
+
+
 def _collect_labels(
     results: List[Dict[str, Any]],
-) -> Dict[str, Dict[str, List[bool]]]:
+) -> Dict[str, Dict[str, list]]:
     """Collect y_true and y_pred per field from pipeline results."""
-    labels: Dict[str, Dict[str, List[bool]]] = {
+    labels: Dict[str, Dict[str, list]] = {
         field: {"y_true": [], "y_pred": []} for field in EVAL_FIELDS
     }
 
@@ -152,17 +158,25 @@ def _collect_labels(
         if pred.get("error"):
             continue
         for field in EVAL_FIELDS:
-            if field in gt and field in pred:
+            if field not in gt or field not in pred:
+                continue
+            if field in CATEGORICAL_FIELDS:
+                labels[field]["y_true"].append(gt[field])
+                labels[field]["y_pred"].append(pred[field])
+            else:
                 labels[field]["y_true"].append(bool(gt[field]))
                 labels[field]["y_pred"].append(bool(pred[field]))
 
     return labels
 
 
-def _compute_metrics(y_true: List[bool], y_pred: List[bool]) -> Dict[str, float]:
+def _compute_metrics(y_true: list, y_pred: list, categorical: bool = False) -> Dict[str, float]:
     """Compute classification metrics for a single field."""
     if not y_true:
         return {"accuracy": 0.0, "precision": 0.0, "recall": 0.0, "f1": 0.0}
+    if categorical:
+        acc = sum(t == p for t, p in zip(y_true, y_pred)) / len(y_true)
+        return {"accuracy": acc, "precision": 0.0, "recall": 0.0, "f1": 0.0}
     return {
         "accuracy": accuracy_score(y_true, y_pred),
         "precision": precision_score(y_true, y_pred, zero_division=0),
@@ -172,7 +186,7 @@ def _compute_metrics(y_true: List[bool], y_pred: List[bool]) -> Dict[str, float]
 
 
 def _print_report(
-    labels: Dict[str, Dict[str, List[bool]]], model_name: str, total: int, errors: int
+    labels: Dict[str, Dict[str, list]], model_name: str, total: int, errors: int
 ) -> Dict[str, Dict[str, float]]:
     """Print classification report and return metrics dict."""
     print(f"\n{'=' * 70}")
@@ -188,25 +202,30 @@ def _print_report(
     for field in EVAL_FIELDS:
         y_true = labels[field]["y_true"]
         y_pred = labels[field]["y_pred"]
-        m = _compute_metrics(y_true, y_pred)
+        is_cat = field in CATEGORICAL_FIELDS
+        m = _compute_metrics(y_true, y_pred, categorical=is_cat)
         all_metrics[field] = m
-        print(
-            f"{field:<20s} {m['accuracy']:>5.1%} {m['precision']:>5.1%} "
-            f"{m['recall']:>5.1%} {m['f1']:>5.1%} {len(y_true):>4d}"
-        )
+        if is_cat:
+            print(f"{field:<20s} {m['accuracy']:>5.1%} {'—':>6s} {'—':>6s} {'—':>6s} {len(y_true):>4d}")
+        else:
+            print(
+                f"{field:<20s} {m['accuracy']:>5.1%} {m['precision']:>5.1%} "
+                f"{m['recall']:>5.1%} {m['f1']:>5.1%} {len(y_true):>4d}"
+            )
 
-    # Overall (micro-average across all fields)
-    all_true = []
-    all_pred = []
+    # Overall accuracy across boolean fields only (for threshold assertion)
+    all_true: list = []
+    all_pred: list = []
     for field in EVAL_FIELDS:
-        all_true.extend(labels[field]["y_true"])
-        all_pred.extend(labels[field]["y_pred"])
+        if field in BOOL_FIELDS:
+            all_true.extend(labels[field]["y_true"])
+            all_pred.extend(labels[field]["y_pred"])
 
     if all_true:
         overall = _compute_metrics(all_true, all_pred)
         print("-" * 48)
         print(
-            f"{'OVERALL (micro)':<20s} {overall['accuracy']:>5.1%} "
+            f"{'OVERALL (bool micro)':<20s} {overall['accuracy']:>5.1%} "
             f"{overall['precision']:>5.1%} {overall['recall']:>5.1%} "
             f"{overall['f1']:>5.1%} {len(all_true):>4d}"
         )
@@ -240,7 +259,13 @@ class TestFullPipelineEval:
                 continue
             misses = []
             for field in EVAL_FIELDS:
-                if field in gt and field in pred and bool(gt[field]) != bool(pred[field]):
+                if field not in gt or field not in pred:
+                    continue
+                if field in CATEGORICAL_FIELDS:
+                    mismatch = gt[field] != pred[field]
+                else:
+                    mismatch = bool(gt[field]) != bool(pred[field])
+                if mismatch:
                     misses.append(f"{field}: got={pred[field]} expected={gt[field]}")
             if misses:
                 logger.warning(f"MISS [{r['job_title']}]: {'; '.join(misses)}")

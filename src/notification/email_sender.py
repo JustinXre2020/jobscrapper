@@ -125,6 +125,13 @@ class EmailSender:
                 if j.get('llm_evaluation', {}).get('visa_sponsorship', False)
             ]
 
+        # Filter by accepted job levels (default: entry only)
+        accepted = recipient.accepted_levels or ["entry"]
+        unique_jobs = [
+            j for j in unique_jobs
+            if j.get('llm_evaluation', {}).get('job_level', 'entry') in accepted
+        ]
+
         return unique_jobs
 
     def create_job_html(self, job: Dict) -> str:
@@ -386,7 +393,7 @@ def main():
             "job_url": "https://example.com/job/1",
             "site": "linkedin",
             "description": "Entry level position for new graduates. Work on cutting-edge technology.",
-            "llm_evaluation": {"visa_sponsorship": True, "entry_level": True}
+            "llm_evaluation": {"visa_sponsorship": True, "job_level": "entry"}
         },
         {
             "title": "Entry Level Full Stack Engineer",
@@ -395,7 +402,7 @@ def main():
             "job_url": "https://example.com/job/2",
             "site": "indeed",
             "description": "Join our team as a new grad engineer and help build the future of AI.",
-            "llm_evaluation": {"visa_sponsorship": False, "entry_level": True}
+            "llm_evaluation": {"visa_sponsorship": False, "job_level": "entry"}
         }
     ]
 

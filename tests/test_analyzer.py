@@ -147,31 +147,17 @@ class TestAnalyzerAccuracy:
         )
 
     @pytest.mark.asyncio
-    async def test_entry_level(
+    async def test_job_level(
         self, llm_client: LLMClient, fixture_index: int
     ) -> None:
         fixture = ALL_FIXTURES[fixture_index]
         summary = PERFECT_SUMMARIES[fixture_index]
-        expected = fixture["expected_evaluation"].get("entry_level")
+        expected = fixture["expected_evaluation"].get("job_level")
         if expected is None:
-            pytest.skip("No expected entry_level")
+            pytest.skip("No expected job_level")
         result = await _call_analyzer(llm_client, summary, fixture["search_terms"])
-        assert result["entry_level"] == expected, (
-            f"Expected entry_level={expected}, got {result['entry_level']}"
-        )
-
-    @pytest.mark.asyncio
-    async def test_is_internship(
-        self, llm_client: LLMClient, fixture_index: int
-    ) -> None:
-        fixture = ALL_FIXTURES[fixture_index]
-        summary = PERFECT_SUMMARIES[fixture_index]
-        expected = fixture["expected_evaluation"].get("is_internship")
-        if expected is None:
-            pytest.skip("No expected is_internship")
-        result = await _call_analyzer(llm_client, summary, fixture["search_terms"])
-        assert result["is_internship"] == expected, (
-            f"Expected is_internship={expected}, got {result['is_internship']}"
+        assert result["job_level"] == expected, (
+            f"Expected job_level={expected!r}, got {result['job_level']!r}"
         )
 
     @pytest.mark.asyncio

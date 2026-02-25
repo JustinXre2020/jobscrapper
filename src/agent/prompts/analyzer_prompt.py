@@ -86,21 +86,17 @@ Using the structured data above, evaluate the job on these criteria:
      * "Candidates must be authorized to work without sponsorship"
    - Return TRUE if sponsorship is mentioned as available or no mention at all.
 
-3. **is_internship**: (true/false)
-   - Use the is_internship_coop field directly.
-   - Also return TRUE if the title contains "Intern", "Internship", "Co-op", "Fellowship", or "Apprenticeship".
+3. **job_level**: ("internship" | "entry" | "junior" | "mid" | "senior")
+   - Assign exactly one level based on Is Internship/Co-op, seniority_level, and years_experience_required:
+     * "internship" — is_internship_coop is true, OR title contains Intern/Co-op/Fellowship/Apprenticeship
+     * "entry"      — 0-1 yrs required AND seniority is entry/unknown, OR no experience mentioned with entry seniority
+     * "junior"     — 1-3 yrs required, OR seniority is "junior" / "entry" with 1-2 yrs
+     * "mid"        — 3-5 yrs required, OR seniority is "mid"
+     * "senior"     — 5+ yrs required, OR seniority is senior/lead/staff/principal/director/vp
+   - Internship always takes priority over experience years.
+   - When seniority_level and years conflict, prefer seniority_level if unambiguous.
 
-4. **entry_level**: (true/false)
-   - Use seniority_level and years_experience_required from the structured data.
-   - Return TRUE if ONE of these conditions is met:
-     a) years_experience_required is 0, 1, or null AND seniority_level is "entry" or "intern"
-     b) years_experience_required starts with 0 (e.g., "0-2 years")
-     c) The description explicitly states "No experience required"
-   - Note: 0-1 year requirements are common for entry-level roles, so treat them as entry-level when seniority confirms it.
-   - Return FALSE if years_experience_required >= 2.
-   - Return FALSE if seniority_level is "mid", "senior", "lead", "staff", "principal", "director", or "vp".
-
-5. **requires_phd**: (true/false)
+4. **requires_phd**: (true/false)
    - Check education_required field.
    - Return TRUE only if education_required is "phd" (mandatory, not preferred).
 
@@ -108,9 +104,8 @@ Using the structured data above, evaluate the job on these criteria:
 Before giving your final JSON answer, you MUST think through each criterion step by step:
 1. List the target roles. Does the normalized title match any? Why or why not?
 2. What do the visa_statements say? Quote the exact phrases.
-3. What is the seniority level and years required? Is this entry-level?
+3. Is this an internship? What is the seniority level and years required? Which job_level bucket fits?
 4. What education is required? Is PhD mandatory?
-5. Is this an internship/co-op/fellowship?
 After reflecting, output your JSON.
 
 ### OUTPUT FORMAT
@@ -118,8 +113,7 @@ Respond ONLY with valid JSON:
 {{
     "keyword_match": boolean,
     "visa_sponsorship": boolean,
-    "entry_level": boolean,
+    "job_level": "internship" | "entry" | "junior" | "mid" | "senior",
     "requires_phd": boolean,
-    "is_internship": boolean,
     "reason": "Concise breakdown citing structured data for each field."
 }}"""

@@ -42,8 +42,7 @@ _ANALYZER_MODEL = settings.analyzer_model
 EVAL_FIELDS = [
     "keyword_match",
     "visa_sponsorship",
-    "entry_level",
-    "is_internship",
+    "job_level",
     "requires_phd",
 ]
 
@@ -54,7 +53,7 @@ CONCURRENCY = settings.agent_concurrency
 
 def _load_eval_data() -> List[Dict[str, Any]]:
     """Load evaluated jobs, separate job data from ground truth."""
-    with open(DATA_PATH) as f:
+    with open(DATA_PATH, encoding="utf-8") as f:
         data = json.load(f)
 
     results = []
@@ -63,34 +62,6 @@ def _load_eval_data() -> List[Dict[str, Any]]:
         ground_truth = job_copy.pop("evaluation", {})
         results.append({"job": job_copy, "ground_truth": ground_truth})
     return results
-
-
-def _infer_search_terms(title: str) -> List[str]:
-    """Infer the most likely search terms from a job title."""
-    t = title.lower()
-    if "product manager" in t or "product management" in t:
-        return ["product manager"]
-    if "data engineer" in t:
-        return ["data engineer"]
-    if "data analyst" in t or "data analysis" in t:
-        return ["data analyst"]
-    if any(w in t for w in ("software", "developer", "swe")):
-        return ["software engineer"]
-    if "engineer" in t and "data" not in t:
-        return ["software engineer"]
-    if "data" in t and "analyst" in t:
-        return ["data analyst"]
-    if "data" in t and "engineer" in t:
-        return ["data engineer"]
-    if "data" in t:
-        return ["data analyst", "data engineer"]
-    if "analyst" in t:
-        return ["data analyst"]
-    if "manager" in t:
-        return ["product manager"]
-    if "engineer" in t:
-        return ["software engineer"]
-    return ALL_SEARCH_TERMS
 
 
 async def _process_single_job(
@@ -115,9 +86,8 @@ async def _process_single_job(
             return {
                 "keyword_match": False,
                 "visa_sponsorship": False,
-                "entry_level": False,
+                "job_level": "entry",
                 "requires_phd": False,
-                "is_internship": False,
                 "reason": "No description available - skipped",
                 "skipped": True,
                 "job_title": job_title,
@@ -130,9 +100,8 @@ async def _process_single_job(
                 return {
                     "keyword_match": False,
                     "visa_sponsorship": False,
-                    "entry_level": False,
+                    "job_level": "senior",
                     "requires_phd": True,
-                    "is_internship": True,
                     "reason": "Rate limited (429) - filtered out",
                     "error": True,
                     "rate_limited": True,
@@ -142,9 +111,8 @@ async def _process_single_job(
             return {
                 "keyword_match": True,
                 "visa_sponsorship": True,
-                "entry_level": True,
+                "job_level": "entry",
                 "requires_phd": False,
-                "is_internship": False,
                 "reason": f"API error: {error_msg[:50]}",
                 "error": True,
                 "job_title": job_title,
@@ -161,9 +129,8 @@ async def _process_single_job(
         return {
             "keyword_match": True,
             "visa_sponsorship": True,
-            "entry_level": True,
+            "job_level": "entry",
             "requires_phd": False,
-            "is_internship": False,
             "reason": f"Error: {str(e)[:50]}",
             "error": True,
             "job_title": job_title,
@@ -188,7 +155,7 @@ async def _run_all(
                 _process_single_job(
                     compiled_graph,
                     item["job"],
-                    _infer_search_terms(item["job"].get("title", "")),
+                    item["job"].get("search_terms", "")[0],
                     [],  # feedback 留空
                 )
                 for item in batch
