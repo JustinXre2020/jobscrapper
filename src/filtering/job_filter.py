@@ -9,8 +9,11 @@ Each node uses its own LLM client configured via settings:
 """
 
 import asyncio
+import json
+from datetime import datetime
+from pathlib import Path
 from loguru import logger
-from typing import Dict, List
+from typing import Dict, List, Optional, Tuple
 
 from agent.feedback.store import feedback_store
 from agent.graph import build_graph, run_single_job
@@ -61,8 +64,12 @@ class LLMFilter:
         job: Dict,
         search_terms: List[str],
         accumulated_feedback: List[str],
-    ) -> Dict:
-        """Process a single job through the per-job workflow."""
+    ) -> Tuple[Dict, Optional[Dict]]:
+        """Process a single job through the per-job workflow.
+
+        Returns:
+            (evaluation_dict, summary_dict_or_None)
+        """
         job_title = job.get("title", "Unknown")
         company = job.get("company", "Unknown")
 
@@ -84,7 +91,7 @@ class LLMFilter:
                     "skipped": True,
                     "job_title": job_title,
                     "company": company,
-                }
+                }, None
 
             if final_state.get("error") and not final_state.get("evaluation"):
                 error_msg = final_state["error"]
@@ -99,7 +106,7 @@ class LLMFilter:
                         "rate_limited": True,
                         "job_title": job_title,
                         "company": company,
-                    }
+                    }, None
                 return {
                     "keyword_match": True,
                     "visa_sponsorship": True,
@@ -109,12 +116,12 @@ class LLMFilter:
                     "error": True,
                     "job_title": job_title,
                     "company": company,
-                }
+                }, None
 
             evaluation = final_state.get("evaluation", {})
             evaluation["job_title"] = job_title
             evaluation["company"] = company
-            return evaluation
+            return evaluation, final_state.get("summary")
 
         except Exception as e:
             logger.error(f"Unexpected error processing {job_title} @ {company}: {e}")
@@ -127,7 +134,7 @@ class LLMFilter:
                 "error": True,
                 "job_title": job_title,
                 "company": company,
-            }
+            }, None
 
     async def _filter_jobs(
         self,
@@ -145,28 +152,61 @@ class LLMFilter:
             logger.info(f"   Loaded {len(accumulated_feedback)} past corrections for Analyzer prompt")
 
         results: List[tuple] = []
+        all_summaries: List[Dict] = []
+        all_evaluations: List[Dict] = []
         completed = 0
 
         for batch_idx in range(0, total, self.concurrency):
             batch = jobs_list[batch_idx : batch_idx + self.concurrency]
 
-            evaluations = await asyncio.gather(
+            pairs = await asyncio.gather(
                 *[
                     self._process_single_job(job, search_terms, accumulated_feedback)
                     for job in batch
                 ]
             )
 
-            results.extend((job, evaluation) for job, evaluation in zip(batch, evaluations))
+            for job, (evaluation, summary) in zip(batch, pairs):
+                results.append((job, evaluation))
+                meta = {
+                    "title": job.get("title", "Unknown"),
+                    "company": job.get("company", "Unknown"),
+                    "job_url": job.get("job_url", ""),
+                }
+                if summary is not None:
+                    all_summaries.append({**meta, "summary": summary})
+                all_evaluations.append({**meta, "evaluation": evaluation})
 
             if batch_idx + self.concurrency < total:
                 await asyncio.sleep(self.rate_limit_delay)
             completed += len(batch)
-
             if verbose:
                 logger.info(f"   Evaluated {min(completed, total)}/{total}...")
 
+        self._save_agent_results(all_summaries, all_evaluations)
         return self._extract_filtered_jobs_from_pairs(results, verbose)
+
+    @staticmethod
+    def _save_agent_results(
+        summaries: List[Dict],
+        evaluations: List[Dict],
+        data_dir: str = "data",
+    ) -> None:
+        """Write summarizer and analyzer results to separate JSON files in data_dir."""
+        ts = datetime.now().strftime("%Y-%m-%d_%H-%M")
+        out = Path(data_dir)
+        out.mkdir(exist_ok=True)
+
+        for name, records in [
+            (f"summarizer_results_{ts}.json", summaries),
+            (f"analyzer_results_{ts}.json", evaluations),
+        ]:
+            path = out / name
+            try:
+                path.write_text(json.dumps(records, indent=2, default=str), encoding="utf-8")
+                logger.info(f"   Saved {len(records)} records → {path}")
+            except Exception as e:
+                logger.warning(f"   Failed to save {path}: {e}")
 
     def _extract_filtered_jobs_from_pairs(
         self, results: List[tuple], verbose: bool = True
@@ -178,6 +218,7 @@ class LLMFilter:
         skipped = 0
         error = 0
         no_visa_count = 0
+        level_counts: Dict[str, int] = {}
 
         for job, evaluation in results:
             if evaluation.get("error", False):
@@ -200,6 +241,8 @@ class LLMFilter:
                 continue
 
             # job_level filtering is handled per-recipient in email_sender
+            level = evaluation.get("job_level", "unknown")
+            level_counts[level] = level_counts.get(level, 0) + 1
             job["llm_evaluation"] = evaluation
             filtered.append(job)
 
@@ -211,6 +254,7 @@ class LLMFilter:
                 excluded_phd,
                 no_visa_count,
                 len(filtered),
+                level_counts,
             )
 
         return filtered
@@ -219,6 +263,7 @@ class LLMFilter:
     def _log_filter_stats(
         error, skipped, excluded_keyword,
         excluded_phd, no_visa_count, filtered_count,
+        level_counts: Dict[str, int] = None,
     ):
         logger.info(f"   Skipped {error} errored jobs (error calling LLM)")
         logger.info(f"   Skipped {skipped} jobs (no description)")
@@ -226,6 +271,19 @@ class LLMFilter:
         logger.info(f"   Excluded {excluded_phd} jobs (PhD required)")
         logger.info(f"   Tracked {no_visa_count} jobs without visa sponsorship (not filtered here)")
         logger.info(f"   {filtered_count} jobs queued for per-recipient level filtering")
+        if level_counts:
+            ordered = ["internship", "entry", "junior", "mid", "senior"]
+            breakdown = ", ".join(
+                f"{lvl}={level_counts[lvl]}"
+                for lvl in ordered
+                if lvl in level_counts
+            )
+            extras = ", ".join(
+                f"{lvl}={cnt}"
+                for lvl, cnt in level_counts.items()
+                if lvl not in ordered
+            )
+            logger.info(f"   Level breakdown: {', '.join(filter(None, [breakdown, extras]))}")
 
     def batch_filter_jobs(
         self,
