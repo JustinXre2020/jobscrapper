@@ -50,6 +50,11 @@ jobs:
           OPENROUTER_MODEL: ${{ secrets.OPENROUTER_MODEL }}
           # Agent Workflow Configuration
           AGENT_CONCURRENCY: ${{ vars.AGENT_CONCURRENCY }}
+          # Per-node LLM model routing
+          SUMMARIZER_PROVIDER: ${{ vars.SUMMARIZER_PROVIDER }}
+          SUMMARIZER_MODEL: ${{ vars.SUMMARIZER_MODEL }}
+          ANALYZER_PROVIDER: ${{ vars.ANALYZER_PROVIDER }}
+          ANALYZER_MODEL: ${{ vars.ANALYZER_MODEL }}
           # Job Search Configuration
           SEARCH_TERMS: ${{ vars.SEARCH_TERMS }}  # Legacy fallback for single recipient
           LOCATIONS: ${{ vars.LOCATIONS }}
