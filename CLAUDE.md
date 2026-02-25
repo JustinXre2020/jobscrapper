@@ -84,7 +84,7 @@ Filter stats logged after each run include a **level breakdown** (`internship=N,
 
 ### Multi-Recipient Architecture
 Defined in `src/utils/config.py`:
-- `Recipient` dataclass: `email`, `needs_sponsorship`, `search_terms`, `accepted_levels` (defaults to `["entry"]`)
+- `Recipient` dataclass: `email`, `needs_sponsorship`, `search_terms`, `accepted_job_levels` (defaults to `["entry"]`)
 - `SEARCH_TERM_GROUPS`: **statically defined** dict in `config.py` — not an env var. Maps group name → list of queries (e.g. `"business analyst/data analyst"` → `["business analyst", "data analyst"]`)
 - `RESULTS_WANTED_MAP`: per-term scrape count overrides (JSON env var)
 - Legacy fallback: `RECIPIENT_EMAIL` + global `SEARCH_TERMS` env vars
@@ -121,7 +121,7 @@ All env vars live in `Settings(BaseSettings)` in `src/utils/config.py`.
 ### Structured Output
 - Pydantic models + `instructor` for LLM output; JSON repair as fallback
 - Models in `src/infra/models.py`: `JobSummaryModel`, `JobEvaluation`, etc.
-- `job_level`: `Literal["internship", "entry", "junior", "mid", "senior"]` — used by `email_sender.py` for per-recipient `accepted_levels` filtering
+- `job_level`: `Literal["internship", "entry", "junior", "mid", "senior"]` — used by `email_sender.py` for per-recipient `accepted_job_levels` filtering
 
 ### Deterministic Overrides in Analyzer
 `_deterministic_eval()` returns `None` for fields requiring semantic judgment:
@@ -147,7 +147,7 @@ All env vars live in `Settings(BaseSettings)` in `src/utils/config.py`.
 
 **Email:**
 - `GMAIL_EMAIL` / `GMAIL_APP_PASSWORD` — App Password, not account password
-- `RECIPIENTS` — JSON array: `[{email, needs_sponsorship, search_terms, accepted_levels}]`
+- `RECIPIENTS` — JSON array: `[{email, needs_sponsorship, search_terms, accepted_job_levels}]`
 
 **LLM:**
 - `OPENROUTER_API_KEY` — required for OpenRouter provider
