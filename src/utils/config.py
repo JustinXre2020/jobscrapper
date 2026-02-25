@@ -177,11 +177,11 @@ class Recipient:
     email: str
     needs_sponsorship: bool
     search_terms: List[str]
-    accepted_levels: List[str] = None  # default set in __post_init__
+    accepted_job_levels: List[str] = None  # default set in __post_init__
 
     def __post_init__(self):
-        if self.accepted_levels is None:
-            self.accepted_levels = ["entry"]
+        if self.accepted_job_levels is None:
+            self.accepted_job_levels = ["entry"]
 
 
 def parse_recipients() -> List[Recipient]:
@@ -221,15 +221,15 @@ def parse_recipients() -> List[Recipient]:
                 search_terms = list(dict.fromkeys(normalize_search_term(t) for t in search_terms))
 
                 # Optional accepted job levels; default to ["entry"]
-                accepted_levels = r.get("accepted_levels", ["entry"])
-                if not isinstance(accepted_levels, list) or not accepted_levels:
-                    accepted_levels = ["entry"]
+                accepted_job_levels = r.get("accepted_job_levels", ["entry"])
+                if not isinstance(accepted_job_levels, list) or not accepted_job_levels:
+                    accepted_job_levels = ["entry"]
 
                 recipients.append(Recipient(
                     email=email,
                     needs_sponsorship=needs_sponsorship,
                     search_terms=search_terms,
-                    accepted_levels=accepted_levels,
+                    accepted_job_levels=accepted_job_levels,
                 ))
 
             logger.debug(f"{len(recipients)} recipient(s) loaded")
@@ -238,7 +238,7 @@ def parse_recipients() -> List[Recipient]:
                     f"recipient[{i}] = email={mask_email(r.email)}, "
                     f"needs_sponsorship={r.needs_sponsorship}, "
                     f"search_terms={r.search_terms}, "
-                    f"accepted_levels={r.accepted_levels}"
+                    f"accepted_job_levels={r.accepted_job_levels}"
                 )
 
             if recipients:
