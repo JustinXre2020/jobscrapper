@@ -59,7 +59,7 @@ black .
 Orchestrated in `src/main.py`:
 1. **Scrape** (`src/infra/scraper.py`) — python-jobspy across configured sites
 2. **Deduplicate** (`src/storage/database.py`) — SQLite via SQLAlchemy, fallback to text file
-3. **LLM Filter** (`src/filtering/job_filter.py`) — LangGraph per-job workflow
+3. **LLM Filter** (`src/filtering/job_filter.py`) — LangGraph per-job workflow; writes `data/summarizer_results_{ts}.json` and `data/analyzer_results_{ts}.json` after each run
 4. **Email** (`src/notification/email_sender.py`) — Gmail SMTP with per-recipient filtering
 5. **Cleanup** (`src/storage/data_manager.py`) — JSON/CSV storage, auto-deletes files >7 days
 
@@ -67,14 +67,25 @@ Orchestrated in `src/main.py`:
 
 **Per-job graph** (`src/agent/graph.py`):
 ```
-[SummarizerNode] → [AnalyzerNode (x3 in parallel)] → [Majority Vote + deterministic overrides] → END
+[SummarizerNode] → [route_after_summarize] → [AnalyzerNode (x3 in parallel)] → [Majority Vote + deterministic overrides] → END
+                                           ↘ END (if skipped or error with no summary)
 ```
 
 - **SummarizerNode** (`src/agent/nodes/summarizer.py`): Extracts structured job metadata via LLM (`SUMMARIZER_PROVIDER` / `SUMMARIZER_MODEL`). Passed directly to `graph.add_node()` — no wrapper closure.
+- **`route_after_summarize()`** (`src/agent/graph.py`): Conditional edge — if `state["skipped"]` is True or there's an error with no summary, routes directly to END (skips Analyzer). Otherwise routes to `"analyzer"`.
 - **AnalyzerNode** (`src/agent/nodes/analyzer.py`): Runs 3 parallel LLM calls internally via `asyncio.gather`, applies majority vote across `BOOLEAN_FIELDS`, then applies deterministic overrides. Passed directly to `graph.add_node()` — no wrapper closure.
 - Each node extends `BaseNode` and holds its own `BaseLLMClient` instance — swap providers without touching graph logic.
 - `BOOLEAN_FIELDS = ["keyword_match", "visa_sponsorship", "entry_level", "requires_phd", "is_internship"]` and helpers `_majority_vote_evaluation`, `_pick_closest_reason` live in `analyzer.py`.
 - Before the LLM ensemble, `_deterministic_eval()` runs rule-based logic and returns `None` for fields that need LLM judgment; non-None values override the ensemble result.
+
+### LLMFilter Debug Output
+After each `batch_filter_jobs()` call, `LLMFilter._save_agent_results()` writes two JSON files directly to `data/` (independent of `DataManager`):
+- `data/summarizer_results_{YYYY-MM-DD_HH-MM}.json` — raw `JobSummaryModel` output per job that had a description
+- `data/analyzer_results_{YYYY-MM-DD_HH-MM}.json` — raw evaluation dict per job (all jobs including errored/skipped)
+
+Each record contains `title`, `company`, `job_url`, and the respective `summary` / `evaluation` dict.
+
+Filter stats are logged after each run including a **level breakdown** (`internship=N, entry=N, junior=N, mid=N, senior=N`) for jobs that passed all filters.
 
 ### Feedback Stores
 - **JSONL** (default): Chronological, last 20 entries (`src/agent/feedback/store.py`)
@@ -82,10 +93,10 @@ Orchestrated in `src/main.py`:
 
 ### Multi-Recipient Architecture
 Defined in `src/utils/config.py`:
-- `Recipient` dataclass: email, `needs_sponsorship` flag, per-recipient `search_terms`
-- `SEARCH_TERM_GROUPS`: slash-separated terms expand to multiple queries
-- `RESULTS_WANTED_MAP`: per-term scrape count overrides
-- Legacy fallback: `RECIPIENT_EMAIL` + global `SEARCH_TERMS`
+- `Recipient` dataclass: `email`, `needs_sponsorship` flag, per-recipient `search_terms`, `accepted_levels` (list of seniority levels to include, defaults to `["entry"]`)
+- `SEARCH_TERM_GROUPS`: statically defined dict in `config.py` mapping group name → list of individual queries (e.g. `"business analyst/data analyst"` → `["business analyst", "data analyst"]`); not an env var
+- `RESULTS_WANTED_MAP`: per-term scrape count overrides (from `RESULTS_WANTED_MAP` env var, JSON object)
+- Legacy fallback: `RECIPIENT_EMAIL` + global `SEARCH_TERMS` env vars
 
 ### LLM Client
 `src/infra/llm_client.py`:
@@ -119,8 +130,8 @@ src/
 │   └── json_repair.py      — JSON repair for malformed LLM output
 ├── filtering/job_filter.py — LangGraph filtering entrypoint (builds per-node clients)
 ├── agent/
-│   ├── graph.py            — Per-job graph + analyzer ensemble voting
-│   ├── state.py            — JobState TypedDict definitions
+│   ├── graph.py            — Per-job graph, conditional routing, analyzer ensemble voting
+│   ├── state.py            — JobState TypedDict; AgentState is a backwards-compat alias
 │   ├── nodes/
 │   │   ├── base.py         — BaseNode ABC with shared helpers
 │   │   ├── summarizer.py   — SummarizerNode (uses SUMMARIZER_PROVIDER/MODEL)
@@ -185,7 +196,7 @@ See `.env.example` for the full list. Key ones:
 
 **Email Configuration:**
 - `GMAIL_EMAIL` / `GMAIL_APP_PASSWORD` — sender credentials (App Password, not account password)
-- `RECIPIENTS` — JSON array of `{email, needs_sponsorship, search_terms}` objects
+- `RECIPIENTS` — JSON array of `{email, needs_sponsorship, search_terms, accepted_levels}` objects
 
 **LLM Configuration:**
 - `OPENROUTER_API_KEY` / `OPENROUTER_MODEL` — OpenRouter access (required only when using OpenRouter provider)
@@ -199,12 +210,7 @@ See `.env.example` for the full list. Key ones:
 - `ANALYZER_PROVIDER` — `local` or `openrouter` (default: `openrouter`)
 - `ANALYZER_MODEL` — model name for Analyzer (default: `liquid/lfm-2.2-6b`)
 
-**Workflow Mode:**
-- `USE_LLM_FILTER` — enable/disable LLM filtering stage
-
 **Agent Tuning:**
-- `LLM_WORKERS` — parallel worker count (`0` = auto)
-- `USE_VECTOR_FEEDBACK` — enable optional vector feedback initialization
 - `AGENT_CONCURRENCY` — parallel job processing limit (default 50)
 
 **Scraping:**
