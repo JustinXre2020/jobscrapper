@@ -126,7 +126,7 @@ class EmailSender:
             ]
 
         # Filter by accepted job levels (default: entry only)
-        accepted = recipient.accepted_levels or ["entry"]
+        accepted = recipient.accepted_job_levels or ["entry"]
         unique_jobs = [
             j for j in unique_jobs
             if j.get('llm_evaluation', {}).get('job_level', 'entry') in accepted

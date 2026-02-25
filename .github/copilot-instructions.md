@@ -4,7 +4,7 @@ This file provides guidance for GitHub Copilot when working with this codebase.
 
 ## Project Overview
 
-Job Hunter Sentinel — an automated job scraping and recommendation system for O-1 visa applicants. Scrapes jobs from multiple boards, filters them with an LLM-based agent pipeline using LangGraph + Reflexion architecture, and emails matched jobs to recipients. Runs on GitHub Actions once per weekday (1 PM EST), skipping US federal holidays.
+Job Hunter Sentinel — an automated job scraping and recommendation system for O-1 visa applicants. Scrapes jobs from multiple boards, filters them with an LLM-based agent pipeline using LangGraph, and emails matched jobs to recipients. Runs on GitHub Actions once per weekday (1 PM EST), skipping US federal holidays.
 
 ## Build, Test, and Lint Commands
 
@@ -73,9 +73,9 @@ Orchestrated in `src/main.py`:
 
 - **SummarizerNode** (`src/agent/nodes/summarizer.py`): Extracts structured job metadata via LLM (`SUMMARIZER_PROVIDER` / `SUMMARIZER_MODEL`). Passed directly to `graph.add_node()` — no wrapper closure.
 - **`route_after_summarize()`** (`src/agent/graph.py`): Conditional edge — if `state["skipped"]` is True or there's an error with no summary, routes directly to END (skips Analyzer). Otherwise routes to `"analyzer"`.
-- **AnalyzerNode** (`src/agent/nodes/analyzer.py`): Runs 3 parallel LLM calls internally via `asyncio.gather`, applies majority vote across `BOOLEAN_FIELDS`, then applies deterministic overrides. Passed directly to `graph.add_node()` — no wrapper closure.
+- **AnalyzerNode** (`src/agent/nodes/analyzer.py`): Runs 3 parallel LLM calls internally via `asyncio.gather`, applies majority vote across `BOOLEAN_FIELDS` and most-common-value voting for `CATEGORICAL_FIELDS`, then applies deterministic overrides. Passed directly to `graph.add_node()` — no wrapper closure.
 - Each node extends `BaseNode` and holds its own `BaseLLMClient` instance — swap providers without touching graph logic.
-- `BOOLEAN_FIELDS = ["keyword_match", "visa_sponsorship", "entry_level", "requires_phd", "is_internship"]` and helpers `_majority_vote_evaluation`, `_pick_closest_reason` live in `analyzer.py`.
+- `BOOLEAN_FIELDS = ["keyword_match", "visa_sponsorship", "requires_phd"]`; `CATEGORICAL_FIELDS = ["job_level"]`; `JOB_LEVELS = ["internship", "entry", "junior", "mid", "senior"]`; helpers `_majority_vote_evaluation`, `_pick_closest_reason` live in `analyzer.py`.
 - Before the LLM ensemble, `_deterministic_eval()` runs rule-based logic and returns `None` for fields that need LLM judgment; non-None values override the ensemble result.
 
 ### LLMFilter Debug Output
@@ -93,7 +93,7 @@ Filter stats are logged after each run including a **level breakdown** (`interns
 
 ### Multi-Recipient Architecture
 Defined in `src/utils/config.py`:
-- `Recipient` dataclass: `email`, `needs_sponsorship` flag, per-recipient `search_terms`, `accepted_levels` (list of seniority levels to include, defaults to `["entry"]`)
+- `Recipient` dataclass: `email`, `needs_sponsorship` flag, per-recipient `search_terms`, `accepted_job_levels` (list of seniority levels to include, defaults to `["entry"]`)
 - `SEARCH_TERM_GROUPS`: statically defined dict in `config.py` mapping group name → list of individual queries (e.g. `"business analyst/data analyst"` → `["business analyst", "data analyst"]`); not an env var
 - `RESULTS_WANTED_MAP`: per-term scrape count overrides (from `RESULTS_WANTED_MAP` env var, JSON object)
 - Legacy fallback: `RECIPIENT_EMAIL` + global `SEARCH_TERMS` env vars
@@ -164,14 +164,14 @@ All environment variables are centralised in `src/utils/config.py` as a `Setting
 ### Structured Output
 - Use Pydantic models + `instructor` for LLM output
 - JSON repair as fallback for malformed responses
-- Models defined in `src/infra/models.py`: `JobSummary`, `JobEvaluation`, `ReviewResult`, etc.
+- Models defined in `src/infra/models.py`: `JobSummaryModel`, `JobEvaluation`, `ReviewResult`, etc.
+- `job_level: Literal["internship", "entry", "junior", "mid", "senior"]` in `JobEvaluation` — used by `email_sender.py` for per-recipient `accepted_job_levels` filtering
 
 ### Deterministic Overrides
 `_deterministic_eval()` in `src/agent/nodes/analyzer.py` runs before the LLM ensemble and returns `None` for fields requiring semantic judgment. Non-None values always override the majority vote:
 - `visa_sponsorship`: empty `visa_statements` → `True`; denial phrases (e.g. "must be", "no visa", "without sponsorship", "us citizen") → `False`
-- `is_internship`: `True` if summary's `is_internship_coop` is set, or title contains `intern`, `co-op`, `fellowship`, or `apprenticeship`
 - `requires_phd`: `True` if summary's `education_required == "phd"`
-- `entry_level`: `False` if `seniority_level` is `mid/senior/lead/staff/principal/director/vp`, or `years_experience_required >= 2`; `True` if seniority is `entry`/`intern` with ≤1 year; otherwise `None` (left to LLM)
+- `job_level` (categorical): `"internship"` if `is_internship_coop` flag set or title contains `intern`/`co-op`/`fellowship`/`apprenticeship`; `"senior"` for senior/lead/staff/principal/director/vp seniority; otherwise `None` (left to LLM)
 - `keyword_match`: always `None` — requires semantic judgment, never deterministic
 
 ### Testing with Markers
@@ -196,7 +196,7 @@ See `.env.example` for the full list. Key ones:
 
 **Email Configuration:**
 - `GMAIL_EMAIL` / `GMAIL_APP_PASSWORD` — sender credentials (App Password, not account password)
-- `RECIPIENTS` — JSON array of `{email, needs_sponsorship, search_terms, accepted_levels}` objects
+- `RECIPIENTS` — JSON array of `{email, needs_sponsorship, search_terms, accepted_job_levels}` objects
 
 **LLM Configuration:**
 - `OPENROUTER_API_KEY` / `OPENROUTER_MODEL` — OpenRouter access (required only when using OpenRouter provider)
